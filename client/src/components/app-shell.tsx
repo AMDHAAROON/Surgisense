@@ -34,7 +34,7 @@ export function AppShell({ children }: PropsWithChildren) {
                 <Activity className="h-6 w-6 text-white" />
               </div>
               <span className="bg-clip-text text-transparent bg-gradient-to-r from-foreground to-foreground/70">
-                SurgiTrack
+                Surgisense
               </span>
             </Link>
             <nav className="hidden md:flex items-center gap-2 p-1 bg-muted/30 rounded-full border border-border/50">
