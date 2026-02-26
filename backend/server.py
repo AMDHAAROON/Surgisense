@@ -40,6 +40,7 @@ latest_data:  dict         = {}
 frame_lock  = threading.Lock()
 data_lock   = threading.Lock()
 ws_clients: list[WebSocket] = []
+camera_active = threading.Event()   # not set = camera off
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -298,6 +299,15 @@ def detector_thread():
     pending_events = []   # new-appearance events for WebSocket
 
     while True:
+        # Wait until camera is started via /api/camera/start
+        if not camera_active.is_set():
+            with frame_lock:
+                latest_frame = None
+            with data_lock:
+                latest_data = {}
+            time.sleep(0.2)
+            continue
+
         ret, frame = cap.read()
         if not ret:
             time.sleep(0.05)
@@ -568,6 +578,24 @@ async def ws_detection(ws: WebSocket):
         print(f"[WS] Client disconnected. Total: {len(ws_clients)}")
 
 
+# ── Camera control ────────────────────────────────────────────────────────────
+@app.post("/api/camera/start")
+def camera_start():
+    camera_active.set()
+    print("[Camera] Started")
+    return {"status": "started"}
+
+@app.post("/api/camera/stop")
+def camera_stop():
+    camera_active.clear()
+    print("[Camera] Stopped")
+    return {"status": "stopped"}
+
+@app.get("/api/camera/status")
+def camera_status():
+    return {"active": camera_active.is_set()}
+
+
 # ── Procedures API ────────────────────────────────────────────────────────────
 @app.get("/api/procedures")
 def get_procedures():
@@ -680,7 +708,7 @@ async def chat(body: dict):
         "contents": contents,
         "generationConfig": {"maxOutputTokens": 512, "temperature": 0.7}
     }).encode("utf-8")
-    MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
+    MODELS = ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash"]
     last_error = ""
     for model_name in MODELS:
         url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
