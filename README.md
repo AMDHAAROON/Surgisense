@@ -62,15 +62,6 @@ Open http://localhost:5173 and click Start Camera to begin.
 
 ---
 
-## 👥 Team
-
-- Aarav Menon — Frontend Lead
-- Meera Iyer — CV Engineer
-- Rohan Das — Backend Architect
-- Sara Khanna — Product Manager
-
----
-
 ## 📄 License
 
 MIT
