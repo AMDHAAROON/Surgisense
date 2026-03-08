@@ -44,6 +44,7 @@ export function AppShell({ children }: PropsWithChildren) {
   const mobileNavLinks = [
     { href: "/", icon: Home, label: "Home" },
     { href: "/test", icon: FlaskConical, label: "Test" },
+    { href: "/inventory", icon: Package, label: "Tools" },
     { href: "/about", icon: Info, label: "About" },
   ];
 
@@ -63,7 +64,7 @@ export function AppShell({ children }: PropsWithChildren) {
             <nav className="hidden md:flex items-center gap-2 p-1 bg-muted/30 rounded-full border border-border/50">
               <NavLink href="/" icon={Home} label="Home" />
               <NavLink href="/test" icon={FlaskConical} label="Test" />
-              <NavLink href="/inventory" icon={Package} label="Inventory" />
+              <NavLink href="/inventory" icon={Package} label="Tools" />
               <NavLink href="/about" icon={Info} label="About" />
             </nav>
           </div>
