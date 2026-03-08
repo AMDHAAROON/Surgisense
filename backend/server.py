@@ -1,4 +1,4 @@
-# backend/server.py - SurgiSense Backend (Groq Vision + Inventory Reconciliation)
+# backend/server.py - SurgiSense Backend
 import asyncio
 import time
 import threading
@@ -38,18 +38,20 @@ app.add_middleware(
 # ── Shared state ──────────────────────────────────────────────────────────────
 latest_frame: bytes | None = None
 latest_data:  dict         = {}
-frame_lock  = threading.Lock()
-data_lock   = threading.Lock()
+frame_lock    = threading.Lock()
+data_lock     = threading.Lock()
 ws_clients: list[WebSocket] = []
 camera_active = threading.Event()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  GROQ VISION
+#  CONFIG
 # ══════════════════════════════════════════════════════════════════════════════
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
-GROQ_MODEL   = "meta-llama/llama-4-scout-17b-16e-instruct"
-GROQ_URL     = "https://api.groq.com/openai/v1/chat/completions"
+GROQ_API_KEY   = os.environ.get("GROQ_API_KEY",   "").strip()
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+
+GROQ_MODEL = "meta-llama/llama-4-scout-17b-16e-instruct"
+GROQ_URL   = "https://api.groq.com/openai/v1/chat/completions"
 
 SURGICAL_TOOLS = [
     "scalpel", "artery_forceps", "iris_scissors", "operating_scissors",
@@ -60,6 +62,10 @@ SURGICAL_TOOLS = [
     "tissue_forceps", "retractor", "clamp", "dissector",
 ]
 
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  GROQ — Live feed tool detection
+# ══════════════════════════════════════════════════════════════════════════════
 GROQ_PROMPT = f"""You are a surgical tool detection system.
 Look at the image and identify any surgical instrument visible.
 Known tools: {", ".join(SURGICAL_TOOLS)}.
@@ -74,7 +80,7 @@ CONFIDENCE: low"""
 
 
 def _groq_post(payload_bytes: bytes) -> dict:
-    """Shared Groq HTTP call using httpx (with urllib fallback)."""
+    """Shared Groq HTTP call (httpx with urllib fallback)."""
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type":  "application/json",
@@ -94,7 +100,7 @@ def _groq_post(payload_bytes: bytes) -> dict:
 
 
 def call_groq_vision(frame: np.ndarray) -> dict | None:
-    """Detect a single tool from a live frame."""
+    """Detect a single tool from a live camera frame."""
     if not GROQ_API_KEY:
         return None
     _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
@@ -111,7 +117,7 @@ def call_groq_vision(frame: np.ndarray) -> dict | None:
     try:
         result = _groq_post(payload)
         text = result["choices"][0]["message"]["content"].strip()
-        tool_name = "none"
+        tool_name  = "none"
         confidence = "low"
         for line in text.splitlines():
             if line.startswith("TOOL:"):
@@ -128,273 +134,31 @@ def call_groq_vision(frame: np.ndarray) -> dict | None:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  INVENTORY: Claude Vision for accurate bounding boxes + tool names
+#  GEMINI — Inventory scanning
 # ══════════════════════════════════════════════════════════════════════════════
-
-ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "").strip()
-CLAUDE_MODEL      = "claude-opus-4-5"
-
-INVENTORY_CLAUDE_PROMPT = f"""You are a surgical instrument detection system.
-Look at this image carefully and identify every surgical instrument visible.
-
-For each instrument, provide a tight bounding box as normalized coordinates (0.0 to 1.0).
-x1,y1 = top-left corner of the instrument, x2,y2 = bottom-right corner.
-The box should tightly wrap just the instrument itself.
+INVENTORY_GEMINI_PROMPT = f"""You are a surgical instrument detection system.
+Identify every surgical instrument in this image.
 
 Known instruments: {", ".join(SURGICAL_TOOLS)}.
 
-Respond ONLY as a JSON array, no other text:
-[
-  {{"name": "scalpel", "confidence": 0.9, "box": {{"x1": 0.1, "y1": 0.2, "x2": 0.25, "y2": 0.8}}}},
-  ...
-]
+CRITICAL DISTINCTIONS — read before identifying scissors:
+- iris_scissors: SMALL, short blades (~2-3cm), delicate pointed tips, fine lightweight handles — used for eye/microsurgery
+- operating_scissors: LARGE, long blades (~5-7cm), heavier build, blunt or curved tips, thick handles — general surgical use
+When you see scissors, measure the blade length relative to the handle. Short blades = iris_scissors. Long blades = operating_scissors. Do NOT guess.
 
-Use exact names from the known list. If no instruments visible, return empty array: []"""
+Return ONLY a valid JSON array. No markdown, no explanation, no extra text.
+Each item must have exactly these fields:
+- "name": instrument name from the known list
+- "confidence": number between 0 and 1
+- "x1": left edge (0.0 to 1.0)
+- "y1": top edge (0.0 to 1.0)
+- "x2": right edge (0.0 to 1.0)
+- "y2": bottom edge (0.0 to 1.0)
 
+Example output:
+[{{"name":"scalpel","confidence":0.9,"x1":0.10,"y1":0.20,"x2":0.25,"y2":0.80}}]
 
-def call_groq_inventory(image_b64: str) -> list:
-    """
-    Use Claude Vision for accurate bounding boxes + tool identification.
-    Falls back to Groq if no Anthropic key is set.
-    """
-    if ANTHROPIC_API_KEY:
-        return _claude_inventory(image_b64)
-    elif GROQ_API_KEY:
-        return _groq_inventory_fallback(image_b64)
-    else:
-        print("[Inventory] No API key found (ANTHROPIC_API_KEY or GROQ_API_KEY)")
-        return []
-
-
-def _claude_inventory(image_b64: str) -> list:
-    """Use Claude claude-opus-4-5 to detect tools with accurate bounding boxes."""
-    import urllib.request, urllib.error
-
-    payload = json.dumps({
-        "model": CLAUDE_MODEL,
-        "max_tokens": 1024,
-        "messages": [{
-            "role": "user",
-            "content": [
-                {
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/jpeg",
-                        "data": image_b64,
-                    }
-                },
-                {
-                    "type": "text",
-                    "text": INVENTORY_CLAUDE_PROMPT
-                }
-            ]
-        }]
-    }).encode("utf-8")
-
-    headers = {
-        "x-api-key":         ANTHROPIC_API_KEY,
-        "anthropic-version": "2023-06-01",
-        "Content-Type":      "application/json",
-    }
-
-    try:
-        req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=payload, headers=headers, method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode())
-
-        raw = result["content"][0]["text"].strip()
-        print(f"[Claude Inventory] Raw response: {raw[:300]}")
-
-        # Strip markdown code fences if present
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip()
-
-        tools = json.loads(raw)
-        if not isinstance(tools, list):
-            print("[Claude Inventory] Response was not a list")
-            return []
-
-        # Validate and normalise each entry
-        valid = []
-        for t in tools:
-            name = t.get("name", "").lower().replace(" ", "_")
-            conf = float(t.get("confidence", 0.7))
-            box  = t.get("box", {})
-            if not box:
-                continue
-            x1, y1 = float(box.get("x1", 0)), float(box.get("y1", 0))
-            x2, y2 = float(box.get("x2", 1)), float(box.get("y2", 1))
-            # Clamp to [0,1]
-            x1,y1,x2,y2 = max(0,x1), max(0,y1), min(1,x2), min(1,y2)
-            if x2 <= x1 or y2 <= y1:
-                continue
-            valid.append({
-                "name":       name,
-                "confidence": conf,
-                "box":        {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
-            })
-            print(f"[Claude Inventory] {name} ({conf:.0%}) → box({x1:.2f},{y1:.2f},{x2:.2f},{y2:.2f})")
-
-        print(f"[Claude Inventory] {len(valid)} tools detected")
-        return valid
-
-    except urllib.error.HTTPError as e:
-        body = e.read().decode()
-        print(f"[Claude Inventory] HTTP error {e.code}: {body[:300]}")
-        return []
-    except Exception as e:
-        print(f"[Claude Inventory] Error: {e}")
-        return []
-
-
-def _groq_inventory_fallback(image_b64: str) -> list:
-    """Fallback: Groq identifies tools (no reliable boxes)."""
-    PROMPT = f"""You are a surgical instrument inventory system.
-List every surgical instrument visible in this image.
-Known instruments: {", ".join(SURGICAL_TOOLS)}.
-
-Respond ONLY as a JSON array:
-[{{"name": "scalpel", "confidence": 0.9, "box": {{"x1": 0.1, "y1": 0.2, "x2": 0.3, "y2": 0.8}}}}]
-
-Estimate bounding boxes as best you can. Return [] if nothing visible."""
-
-    payload = json.dumps({
-        "model": GROQ_MODEL,
-        "messages": [{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-            {"type": "text", "text": PROMPT}
-        ]}],
-        "max_tokens": 800,
-        "temperature": 0.1,
-    }).encode("utf-8")
-
-    try:
-        result = _groq_post(payload)
-        raw    = result["choices"][0]["message"]["content"].strip()
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"): raw = raw[4:]
-        tools = json.loads(raw.strip())
-        return tools if isinstance(tools, list) else []
-    except Exception as e:
-        print(f"[Groq Inventory Fallback] Error: {e}")
-        return []
-    """
-    Use OpenCV to find precise bounding boxes of surgical instruments on a tray.
-    Tries multiple threshold strategies and picks the best result.
-    Returns list of {"x1","y1","x2","y2"} in normalized 0-1 coords.
-    """
-    img_bytes = base64.b64decode(image_b64)
-    arr       = np.frombuffer(img_bytes, dtype=np.uint8)
-    img       = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    if img is None:
-        print("[OpenCV] ERROR: could not decode image")
-        return []
-
-    H, W = img.shape[:2]
-    print(f"[OpenCV] Image size: {W}x{H}")
-
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    print(f"[OpenCV] Gray stats — min:{gray.min()} max:{gray.max()} mean:{gray.mean():.1f}")
-
-    blur = cv2.GaussianBlur(gray, (5, 5), 0)
-
-    candidates = []
-
-    # Strategy 1: Otsu global threshold
-    _, otsu = cv2.threshold(blur, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-    candidates.append(("Otsu", otsu))
-
-    # Strategy 2: Adaptive small block
-    adap_small = cv2.adaptiveThreshold(
-        blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV, blockSize=21, C=6
-    )
-    candidates.append(("Adaptive-small", adap_small))
-
-    # Strategy 3: Adaptive large block
-    adap_large = cv2.adaptiveThreshold(
-        blur, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY_INV, blockSize=51, C=8
-    )
-    candidates.append(("Adaptive-large", adap_large))
-
-    # Strategy 4: Canny edges dilated (catches shiny metallic tools)
-    edges  = cv2.Canny(blur, 30, 100)
-    kernel_e = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
-    canny  = cv2.dilate(edges, kernel_e, iterations=3)
-    candidates.append(("Canny", canny))
-
-    # Very permissive area: just exclude single-pixel noise and full-image blobs
-    min_area = 200                  # at least 200px² (not noise)
-    max_area = (W * H) * 0.90      # less than 90% of image
-
-    # Proximity merge distance: only join fragments that are very close (same tool parts)
-    prox_px  = int(min(W, H) * 0.015)   # ~1.5% — tight enough to not bridge separate tools
-
-    best_boxes = []
-    best_count = 0
-    best_strat = "none"
-
-    for strat_name, thresh in candidates:
-        # Large kernel close to reconnect nearby fragments of the same tool
-        kernel_close = cv2.getStructuringElement(cv2.MORPH_RECT, (11, 11))
-        closed  = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel_close, iterations=3)
-        dilated = cv2.dilate(closed, kernel_close, iterations=2)
-
-        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        print(f"[OpenCV] {strat_name}: {len(contours)} raw contours")
-
-        # Collect all boxes that pass the very permissive area filter
-        boxes = []
-        for cnt in contours:
-            area = cv2.contourArea(cnt)
-            if not (min_area < area < max_area):
-                continue
-            x, y, w, h = cv2.boundingRect(cnt)
-            boxes.append({
-                "x1": round(x / W, 4),
-                "y1": round(y / H, 4),
-                "x2": round((x + w) / W, 4),
-                "y2": round((y + h) / H, 4),
-            })
-
-        print(f"[OpenCV] {strat_name}: {len(boxes)} boxes passed area filter")
-
-        # First merge overlapping, then merge nearby (proximity)
-        boxes = _merge_overlapping(boxes, iou_thresh=0.1)
-        boxes = _merge_by_proximity(boxes, prox_px, W, H)
-        boxes = _merge_overlapping(boxes, iou_thresh=0.1)  # second pass
-
-        # Final filter: remove boxes too small to be a real tool
-        final_min = (W * H) * 0.001
-        boxes = [b for b in boxes
-                 if (b["x2"]-b["x1"]) * W * (b["y2"]-b["y1"]) * H > final_min]
-
-        print(f"[OpenCV] {strat_name}: {len(boxes)} boxes after merge+filter")
-
-        if len(boxes) > best_count:
-            best_count = len(boxes)
-            best_boxes = boxes
-            best_strat = strat_name
-
-    if best_boxes:
-        print(f"[OpenCV] Best strategy: {best_strat} → {len(best_boxes)} tools")
-        for i, b in enumerate(best_boxes):
-            w = round((b['x2']-b['x1'])*100, 1)
-            h = round((b['y2']-b['y1'])*100, 1)
-            print(f"  Box {i+1}: x1={b['x1']:.3f} y1={b['y1']:.3f} x2={b['x2']:.3f} y2={b['y2']:.3f}  ({w}% wide, {h}% tall)")
-    else:
-        print("[OpenCV] All strategies found 0 boxes — check image quality/lighting")
-
-    return best_boxes
+Return [] if no instruments visible."""
 
 
 def _iou(a: dict, b: dict) -> float:
@@ -409,172 +173,157 @@ def _iou(a: dict, b: dict) -> float:
     return inter / (area_a + area_b - inter)
 
 
-def _merge_overlapping(boxes: list[dict], iou_thresh: float = 0.3) -> list[dict]:
-    """Greedy merge: if two boxes overlap > iou_thresh, combine into one."""
-    merged = []
-    used   = [False] * len(boxes)
-    for i, a in enumerate(boxes):
-        if used[i]:
-            continue
-        group = [a]
-        for j, b in enumerate(boxes):
-            if i != j and not used[j] and _iou(a, b) > iou_thresh:
-                group.append(b)
-                used[j] = True
-        merged.append({
-            "x1": min(g["x1"] for g in group),
-            "y1": min(g["y1"] for g in group),
-            "x2": max(g["x2"] for g in group),
-            "y2": max(g["y2"] for g in group),
-        })
-        used[i] = True
-    return merged
+def _nms_deduplicate(tools: list, iou_thresh: float = 0.4) -> list:
+    """Non-Maximum Suppression per tool name — keeps highest-confidence detection when boxes overlap."""
+    if not tools:
+        return tools
+    from collections import defaultdict
+    by_name = defaultdict(list)
+    for t in tools:
+        by_name[t["name"]].append(t)
+    result = []
+    for name, group in by_name.items():
+        group = sorted(group, key=lambda x: x["confidence"], reverse=True)
+        kept  = []
+        used  = [False] * len(group)
+        for i, a in enumerate(group):
+            if used[i]:
+                continue
+            for j, b in enumerate(group):
+                if i != j and not used[j] and _iou(a["box"], b["box"]) > iou_thresh:
+                    used[j] = True
+            kept.append(a)
+            used[i] = True
+        print(f"[NMS] {name}: {len(group)} → {len(kept)} kept")
+        result.extend(kept)
+    return result
 
 
-def _merge_by_proximity(boxes: list[dict], prox_px: int, W: int, H: int) -> list[dict]:
-    """Merge boxes whose edges are within prox_px pixels — but never exceed 25% image width per box."""
-    if not boxes:
-        return boxes
-    prox_x = prox_px / W
-    prox_y = prox_px / H
-    max_box_w = 0.30   # merged box must not exceed 30% of image width
-    max_box_h = 0.90   # merged box must not exceed 90% of image height
+def _gemini_inventory(image_b64: str) -> list:
+    """Use Gemini 2.5 Flash to detect tools with bounding boxes."""
+    payload = json.dumps({
+        "contents": [{
+            "parts": [
+                {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}},
+                {"text": INVENTORY_GEMINI_PROMPT}
+            ]
+        }],
+        "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.1}
+    }).encode("utf-8")
 
-    def are_close(a, b):
-        h_close = a["x1"] - prox_x <= b["x2"] and b["x1"] - prox_x <= a["x2"]
-        v_close = a["y1"] - prox_y <= b["y2"] and b["y1"] - prox_y <= a["y2"]
-        return h_close and v_close
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+    try:
+        req = urllib.request.Request(url, data=payload,
+                                     headers={"Content-Type": "application/json"}, method="POST")
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            result = json.loads(resp.read().decode())
 
-    def merged_box(group):
-        return {
-            "x1": min(g["x1"] for g in group),
-            "y1": min(g["y1"] for g in group),
-            "x2": max(g["x2"] for g in group),
-            "y2": max(g["y2"] for g in group),
-        }
+        raw = result["candidates"][0]["content"]["parts"][0]["text"].strip()
+        print(f"[Gemini Inventory] Raw: {raw[:400]}")
 
-    merged = []
-    used   = [False] * len(boxes)
-    for i, a in enumerate(boxes):
-        if used[i]:
-            continue
-        group = [a]
-        changed = True
-        while changed:
-            changed = False
-            for j, b in enumerate(boxes):
-                if used[j] or j == i:
-                    continue
-                for g in group:
-                    if are_close(g, b):
-                        candidate = merged_box(group + [b])
-                        # Only merge if result doesn't become too wide/tall
-                        if (candidate["x2"] - candidate["x1"]) <= max_box_w and \
-                           (candidate["y2"] - candidate["y1"]) <= max_box_h:
-                            group.append(b)
-                            used[j] = True
-                            changed  = True
-                        break
-        merged.append(merged_box(group))
-        used[i] = True
-    return merged
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
+
+        items = json.loads(raw)
+        if not isinstance(items, list):
+            return []
+
+        valid = []
+        for t in items:
+            # Format 1 — Gemini native: {"box_2d": [y1,x1,y2,x2], "label": "name"} 0-1000 scale
+            if "box_2d" in t:
+                coords = t["box_2d"]
+                y1 = max(0.0, coords[0] / 1000); x1 = max(0.0, coords[1] / 1000)
+                y2 = min(1.0, coords[2] / 1000); x2 = min(1.0, coords[3] / 1000)
+                name = t.get("label", "unknown").lower().replace(" ", "_")
+                conf = float(t.get("confidence", 0.85))
+
+            # Format 2 — Flat: {"name":..., "x1":..., "y1":..., "x2":..., "y2":...}
+            elif "x1" in t:
+                x1 = max(0.0, float(t.get("x1", 0))); y1 = max(0.0, float(t.get("y1", 0)))
+                x2 = min(1.0, float(t.get("x2", 1))); y2 = min(1.0, float(t.get("y2", 1)))
+                name = t.get("name", "unknown").lower().replace(" ", "_")
+                conf = float(t.get("confidence", 0.7))
+
+            # Format 3 — Nested: {"name":..., "box": {x1,y1,x2,y2}}
+            elif "box" in t and isinstance(t["box"], dict):
+                box  = t["box"]
+                x1 = max(0.0, float(box.get("x1", 0))); y1 = max(0.0, float(box.get("y1", 0)))
+                x2 = min(1.0, float(box.get("x2", 1))); y2 = min(1.0, float(box.get("y2", 1)))
+                name = t.get("name", "unknown").lower().replace(" ", "_")
+                conf = float(t.get("confidence", 0.7))
+            else:
+                print(f"[Gemini Inventory] Unknown format: {t}")
+                continue
+
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            valid.append({"name": name, "confidence": conf,
+                          "box": {"x1": x1, "y1": y1, "x2": x2, "y2": y2}})
+            print(f"[Gemini Inventory] {name} ({conf:.0%}) box=({x1:.3f},{y1:.3f},{x2:.3f},{y2:.3f})")
+
+        print(f"[Gemini Inventory] {len(valid)} tools before NMS")
+        valid = _nms_deduplicate(valid)
+        print(f"[Gemini Inventory] {len(valid)} tools after NMS")
+        return valid
+
+    except urllib.error.HTTPError as e:
+        try: err = json.loads(e.read().decode()).get("error", {}).get("message", str(e))
+        except: err = str(e)
+        print(f"[Gemini Inventory] HTTP error: {err[:200]}")
+        return []
+    except Exception as e:
+        print(f"[Gemini Inventory] Error: {e}")
+        return []
 
 
-# ── Groq naming only (no box coords needed) ───────────────────────────────────
-INVENTORY_NAMING_PROMPT = f"""You are a surgical instrument identification system.
-You will be given a cropped image of a single surgical instrument.
-Identify it from the known list below.
-
+def _groq_inventory_fallback(image_b64: str) -> list:
+    """Fallback when no Gemini key: Groq with approximate boxes."""
+    PROMPT = f"""You are a surgical instrument inventory system.
+List every surgical instrument visible in this image.
 Known instruments: {", ".join(SURGICAL_TOOLS)}.
-
-Respond ONLY in this exact format:
-TOOL: <exact_name_from_list or unknown>
-CONFIDENCE: <high, medium, or low>"""
-
-
-def _crop_b64(image_b64: str, box: dict) -> str:
-    """Crop a region from a base64 image and return as base64 JPEG."""
-    img_bytes = base64.b64decode(image_b64)
-    arr       = np.frombuffer(img_bytes, dtype=np.uint8)
-    img       = cv2.imdecode(arr, cv2.IMREAD_COLOR)
-    H, W      = img.shape[:2]
-
-    x1 = max(0, int(box["x1"] * W) - 10)
-    y1 = max(0, int(box["y1"] * H) - 10)
-    x2 = min(W, int(box["x2"] * W) + 10)
-    y2 = min(H, int(box["y2"] * H) + 10)
-
-    crop = img[y1:y2, x1:x2]
-    if crop.size == 0:
-        return image_b64   # fallback: send full image
-
-    _, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 85])
-    return base64.b64encode(buf).decode("utf-8")
-
-
-def _name_crop(crop_b64: str) -> tuple[str, float]:
-    """Ask Groq to name a single cropped tool. Returns (name, confidence)."""
+Respond ONLY as a JSON array with no markdown:
+[{{"name": "scalpel", "confidence": 0.9, "box": {{"x1": 0.1, "y1": 0.2, "x2": 0.3, "y2": 0.8}}}}]
+Return [] if nothing visible."""
     payload = json.dumps({
         "model": GROQ_MODEL,
         "messages": [{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{crop_b64}"}},
-            {"type": "text",      "text": INVENTORY_NAMING_PROMPT}
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+            {"type": "text", "text": PROMPT}
         ]}],
-        "max_tokens": 40,
-        "temperature": 0.1,
+        "max_tokens": 800, "temperature": 0.1,
     }).encode("utf-8")
     try:
         result = _groq_post(payload)
-        text   = result["choices"][0]["message"]["content"].strip()
-        name, conf_str = "unknown", "low"
-        for line in text.splitlines():
-            if line.startswith("TOOL:"):
-                name     = line.split(":", 1)[1].strip().lower().replace(" ", "_")
-            if line.startswith("CONFIDENCE:"):
-                conf_str = line.split(":", 1)[1].strip().lower()
-        conf = {"high": 0.9, "medium": 0.65, "low": 0.4}.get(conf_str, 0.5)
-        return name, conf
+        raw    = result["choices"][0]["message"]["content"].strip()
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"): raw = raw[4:]
+        tools = json.loads(raw.strip())
+        return tools if isinstance(tools, list) else []
     except Exception as e:
-        print(f"[Groq naming] Error: {e}")
-        return "unknown", 0.4
-
-
-def call_groq_inventory(image_b64: str) -> list:
-    """
-    Hybrid pipeline:
-      1. OpenCV finds precise bounding boxes from contours
-      2. Each box is cropped and sent to Groq for identification
-      3. Returns tools with accurate boxes + correct names
-    """
-    # Step 1: Get precise boxes via OpenCV
-    boxes = detect_contour_boxes(image_b64)
-    if not boxes:
-        print("[Inventory] No contours found — image may be empty or too noisy")
+        print(f"[Groq Inventory Fallback] Error: {e}")
         return []
 
-    tools = []
-    for i, box in enumerate(boxes):
-        # Step 2: Crop each detected region
-        crop = _crop_b64(image_b64, box)
 
-        # Step 3: Ask Groq to name it
-        name, conf = _name_crop(crop)
-        print(f"[Inventory] Box {i+1}/{len(boxes)} → {name} ({conf:.0%})")
-
-        if name == "unknown":
-            continue   # skip unrecognised regions
-
-        tools.append({
-            "name":       name,
-            "confidence": conf,
-            "box":        box,   # ← these are now real OpenCV pixel boxes
-        })
-
-    return tools
+def scan_inventory(image_b64: str) -> list:
+    """Main inventory entry point: Gemini 2.5 Flash → Groq fallback."""
+    if GEMINI_API_KEY:
+        return _gemini_inventory(image_b64)
+    elif GROQ_API_KEY:
+        print("[Inventory] No Gemini key — using Groq fallback")
+        return _groq_inventory_fallback(image_b64)
+    else:
+        print("[Inventory] No API key found — set GEMINI_API_KEY in .env")
+        return []
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  DETECTOR THREAD
+#  DETECTOR THREAD — Groq vision every 3s, MJPEG stream
 # ══════════════════════════════════════════════════════════════════════════════
 def detector_thread():
     global latest_frame, latest_data
@@ -584,14 +333,17 @@ def detector_thread():
     CAMERA_INDEX   = int(os.environ.get("CAMERA_INDEX", "0"))
 
     print("\n" + "="*60)
-    print("SurgiSense — Groq Vision Detector (full frame)")
+    print("SurgiSense — Groq Vision Detector")
     print("="*60)
     if GROQ_API_KEY:
-        print(f"  ✓ Groq API key loaded")
-        print(f"  ✓ Model: {GROQ_MODEL}")
-        print(f"  ✓ Sending full frame every {GROQ_EVERY_SEC}s (non-blocking)")
+        print(f"  ✓ Groq key loaded  |  Model: {GROQ_MODEL}")
+        print(f"  ✓ Scanning every {GROQ_EVERY_SEC}s (non-blocking)")
     else:
         print("  ⚠ No GROQ_API_KEY — add it to backend/.env")
+    if GEMINI_API_KEY:
+        print("  ✓ Gemini key loaded  |  Inventory + Chat ready")
+    else:
+        print("  ⚠ No GEMINI_API_KEY — inventory will use Groq fallback")
     print("="*60 + "\n")
 
     fps_history    = deque(maxlen=30)
@@ -661,11 +413,13 @@ def detector_thread():
             groq_running.set()
             threading.Thread(target=groq_worker, args=(frame.copy(),), daemon=True).start()
 
+        # Expire old tools
         for name in list(current_tools.keys()):
             if now - current_tools[name]["last_seen"] > TOOL_EXPIRE:
                 del current_tools[name]
                 last_printed.pop(name, None)
 
+        # Draw detected tools on frame
         y_offset = 120
         for tool in current_tools.values():
             label = f"{tool['name'].replace('_', ' ')}  {tool['confidence']:.0%}"
@@ -674,6 +428,7 @@ def detector_thread():
             cv2.putText(frame, label, (15, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
             y_offset += 40
 
+        # Draw HUD bar
         cv2.rectangle(frame, (0, 0), (W, 100), (0, 0, 0), -1)
         cv2.rectangle(frame, (0, 0), (W, 100), (255, 255, 255), 2)
         fps_color = (0, 255, 0) if avg_fps >= 20 else (0, 165, 255) if avg_fps >= 10 else (0, 0, 255)
@@ -802,7 +557,10 @@ def init_db():
             print("✓ Seeding complete.")
 
 
-# ── Startup ───────────────────────────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  API
+# ══════════════════════════════════════════════════════════════════════════════
+
 @app.on_event("startup")
 async def startup():
     init_db()
@@ -854,13 +612,11 @@ async def ws_detection(ws: WebSocket):
 @app.post("/api/camera/start")
 def camera_start():
     camera_active.set()
-    print("[Camera] Started")
     return {"status": "started"}
 
 @app.post("/api/camera/stop")
 def camera_stop():
     camera_active.clear()
-    print("[Camera] Stopped")
     return {"status": "stopped"}
 
 @app.get("/api/camera/status")
@@ -935,10 +691,10 @@ async def create_contact(body: dict):
     return JSONResponse({"success": True}, status_code=201)
 
 
-# ── Gemini chat (single, de-duplicated) ───────────────────────────────────────
+# ── Chat — Gemini SurgiBot ─────────────────────────────────────────────────────
 @app.post("/api/chat")
 async def chat(body: dict):
-    api_key = os.environ.get("GEMINI_API_KEY", "").strip()
+    api_key = GEMINI_API_KEY
     if not api_key:
         return JSONResponse({"response": "⚠️ No Gemini API key. Add GEMINI_API_KEY to backend/.env"})
     messages = body.get("messages", [])
@@ -973,229 +729,20 @@ async def chat(body: dict):
             last_error = str(e)
     return JSONResponse({"response": f"All models failed. Last error: {last_error}"})
 
-# ══════════════════════════════════════════════════════════════════════════════
-#  INVENTORY: Gemini Vision for accurate bounding boxes + tool names
-# ══════════════════════════════════════════════════════════════════════════════
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
-
-INVENTORY_GEMINI_PROMPT = f"""You are a surgical instrument detection system.
-Identify every surgical instrument in this image.
-
-Known instruments: {", ".join(SURGICAL_TOOLS)}.
-
-CRITICAL DISTINCTIONS — read before identifying scissors:
-- iris_scissors: SMALL, short blades (~2-3cm), delicate pointed tips, fine lightweight handles — used for eye/microsurgery
-- operating_scissors: LARGE, long blades (~5-7cm), heavier build, blunt or curved tips, thick handles — general surgical use
-When you see scissors, measure the blade length relative to the handle. Short blades = iris_scissors. Long blades = operating_scissors. Do NOT guess.
-
-Return ONLY a valid JSON array. No markdown, no explanation, no extra text.
-Each item must have exactly these fields:
-- "name": instrument name from the known list
-- "confidence": number between 0 and 1
-- "x1": left edge (0.0 to 1.0)
-- "y1": top edge (0.0 to 1.0)
-- "x2": right edge (0.0 to 1.0)
-- "y2": bottom edge (0.0 to 1.0)
-
-Example output:
-[{{"name":"scalpel","confidence":0.9,"x1":0.10,"y1":0.20,"x2":0.25,"y2":0.80}},{{"name":"iris_scissors","confidence":0.85,"x1":0.30,"y1":0.15,"x2":0.50,"y2":0.75}}]
-
-Return [] if no instruments visible."""
-
-
-def _nms_deduplicate(tools: list, iou_thresh: float = 0.4) -> list:
-    """
-    Non-Maximum Suppression per tool name.
-    If two detections of the SAME tool overlap > iou_thresh, keep only
-    the one with higher confidence.
-    """
-    if not tools:
-        return tools
-
-    from collections import defaultdict
-    by_name = defaultdict(list)
-    for t in tools:
-        by_name[t["name"]].append(t)
-
-    result = []
-    for name, group in by_name.items():
-        group = sorted(group, key=lambda x: x["confidence"], reverse=True)
-        kept = []
-        used = [False] * len(group)
-        for i, a in enumerate(group):
-            if used[i]:
-                continue
-            for j, b in enumerate(group):
-                if i != j and not used[j]:
-                    if _iou(a["box"], b["box"]) > iou_thresh:
-                        used[j] = True
-            kept.append(a)
-            used[i] = True
-        print(f"[NMS] {name}: {len(group)} detections → {len(kept)} kept")
-        result.extend(kept)
-
-    return result
-
-
-def call_groq_inventory(image_b64: str) -> list:
-    """Use Gemini Vision for accurate bounding boxes. Falls back to Groq if no Gemini key."""
-    if GEMINI_API_KEY:
-        return _gemini_inventory(image_b64)
-    elif GROQ_API_KEY:
-        return _groq_inventory_fallback(image_b64)
-    else:
-        print("[Inventory] No API key found — set GEMINI_API_KEY or GROQ_API_KEY in .env")
-        return []
-
-
-def _gemini_inventory(image_b64: str) -> list:
-    """Use Gemini 2.5 Flash to detect tools — parses native box_2d format [y1,x1,y2,x2] 0-1000 scale."""
-
-    payload = json.dumps({
-        "contents": [{
-            "parts": [
-                {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}},
-                {"text": INVENTORY_GEMINI_PROMPT}
-            ]
-        }],
-        "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.1}
-    }).encode("utf-8")
-
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
-    try:
-        req = urllib.request.Request(
-            url, data=payload,
-            headers={"Content-Type": "application/json"}, method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode())
-
-        raw = result["candidates"][0]["content"]["parts"][0]["text"].strip()
-        print(f"[Gemini Inventory] Raw: {raw[:600]}")
-
-        # Strip markdown fences
-        if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-        raw = raw.strip()
-
-        items = json.loads(raw)
-        if not isinstance(items, list):
-            return []
-
-        valid = []
-        for t in items:
-            # Gemini 2.5 native: {"box_2d": [y1,x1,y2,x2], "label": "name"} 0-1000 scale
-            if "box_2d" in t:
-                coords = t["box_2d"]
-                y1 = max(0.0, coords[0] / 1000)
-                x1 = max(0.0, coords[1] / 1000)
-                y2 = min(1.0, coords[2] / 1000)
-                x2 = min(1.0, coords[3] / 1000)
-                name = t.get("label", "unknown").lower().replace(" ", "_")
-                conf = float(t.get("confidence", 0.85))
-
-            # Flat format: {"name":..., "x1":..., "y1":..., "x2":..., "y2":...}
-            elif "x1" in t:
-                x1 = max(0.0, float(t.get("x1", 0)))
-                y1 = max(0.0, float(t.get("y1", 0)))
-                x2 = min(1.0, float(t.get("x2", 1)))
-                y2 = min(1.0, float(t.get("y2", 1)))
-                name = t.get("name", "unknown").lower().replace(" ", "_")
-                conf = float(t.get("confidence", 0.7))
-
-            # Nested box format: {"name":..., "box":{x1,y1,x2,y2}}
-            elif "box" in t and isinstance(t["box"], dict):
-                box  = t["box"]
-                x1 = max(0.0, float(box.get("x1", 0)))
-                y1 = max(0.0, float(box.get("y1", 0)))
-                x2 = min(1.0, float(box.get("x2", 1)))
-                y2 = min(1.0, float(box.get("y2", 1)))
-                name = t.get("name", "unknown").lower().replace(" ", "_")
-                conf = float(t.get("confidence", 0.7))
-            else:
-                print(f"[Gemini Inventory] Skipping unrecognised format: {t}")
-                continue
-
-            if x2 <= x1 or y2 <= y1:
-                continue
-
-            valid.append({
-                "name":       name,
-                "confidence": conf,
-                "box":        {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
-            })
-            print(f"[Gemini Inventory] {name} ({conf:.0%}) box=({x1:.3f},{y1:.3f},{x2:.3f},{y2:.3f})")
-
-        print(f"[Gemini Inventory] {len(valid)} tools detected")
-
-        # Remove duplicate detections of the same tool (NMS per tool name)
-        valid = _nms_deduplicate(valid)
-        print(f"[Gemini Inventory] {len(valid)} tools after deduplication")
-        return valid
-
-    except urllib.error.HTTPError as e:
-        try: err = json.loads(e.read().decode()).get("error", {}).get("message", str(e))
-        except: err = str(e)
-        print(f"[Gemini Inventory] HTTP error: {err[:200]}")
-        return []
-    except Exception as e:
-        print(f"[Gemini Inventory] Error: {e}")
-        return []
-
-
-def _groq_inventory_fallback(image_b64: str) -> list:
-    """Fallback: Groq identifies tools (approximate boxes only)."""
-    PROMPT = f"""You are a surgical instrument inventory system.
-List every surgical instrument visible in this image.
-Known instruments: {", ".join(SURGICAL_TOOLS)}.
-Respond ONLY as a JSON array with no markdown:
-[{{"name": "scalpel", "confidence": 0.9, "box": {{"x1": 0.1, "y1": 0.2, "x2": 0.3, "y2": 0.8}}}}]
-Return [] if nothing visible."""
-
-    payload = json.dumps({
-        "model": GROQ_MODEL,
-        "messages": [{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-            {"type": "text", "text": PROMPT}
-        ]}],
-        "max_tokens": 800, "temperature": 0.1,
-    }).encode("utf-8")
-
-    try:
-        result = _groq_post(payload)
-        raw    = result["choices"][0]["message"]["content"].strip()
-        if "```" in raw:
-            raw = raw.split("```")[1]
-            if raw.startswith("json"): raw = raw[4:]
-        tools = json.loads(raw.strip())
-        return tools if isinstance(tools, list) else []
-    except Exception as e:
-        print(f"[Groq Inventory Fallback] Error: {e}")
-        return []
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  INVENTORY ENDPOINTS
-# ══════════════════════════════════════════════════════════════════════════════
-
+# ── Inventory ─────────────────────────────────────────────────────────────────
 @app.post("/api/inventory/scan")
 async def inventory_scan(body: dict = Body(...)):
-    """Receive a base64 image, detect all tools + bounding boxes via Groq."""
     image_b64 = body.get("image", "")
     if not image_b64:
         return JSONResponse({"error": "No image provided"}, status_code=400)
     if "," in image_b64:
         image_b64 = image_b64.split(",", 1)[1]
-    tools = call_groq_inventory(image_b64)
+    tools = scan_inventory(image_b64)
     return JSONResponse({"tools": tools, "count": len(tools)})
-
 
 @app.post("/api/inventory/save")
 async def inventory_save(body: dict = Body(...)):
-    """Save a pre or post surgery inventory scan to the database."""
     session_type = body.get("type", "pre")
     tools        = body.get("tools", [])
     image_b64    = body.get("image", None)
@@ -1214,10 +761,8 @@ async def inventory_save(body: dict = Body(...)):
     return JSONResponse({"id": row["id"], "type": session_type,
                          "toolCount": len(tools), "createdAt": str(row["created_at"])}, status_code=201)
 
-
 @app.get("/api/inventory/latest/{session_type}")
 def inventory_latest(session_type: str):
-    """Get the most recent pre or post inventory session."""
     if session_type not in ("pre", "post"):
         return JSONResponse({"error": "type must be 'pre' or 'post'"}, status_code=400)
     with get_db() as conn:
@@ -1234,10 +779,8 @@ def inventory_latest(session_type: str):
                          "tools": row["tools_json"], "image": row["image_b64"],
                          "createdAt": str(row["created_at"])})
 
-
 @app.post("/api/inventory/reconcile")
 async def inventory_reconcile(body: dict = Body(...)):
-    """Compare post-surgery tools against the latest pre-surgery inventory."""
     post_tools     = body.get("postTools", [])
     pre_session_id = body.get("preSessionId", None)
     with get_db() as conn:
@@ -1249,37 +792,29 @@ async def inventory_reconcile(body: dict = Body(...)):
                         "WHERE session_type='pre' ORDER BY created_at DESC LIMIT 1")
         row = cur.fetchone()
     if not row:
-        return JSONResponse({"error": "No pre-surgery inventory found. Please scan before surgery first."}, status_code=404)
-    pre_tools  = row["tools_json"]
+        return JSONResponse({"error": "No pre-surgery inventory found. Scan before surgery first."}, status_code=404)
+    pre_tools = row["tools_json"]
 
-    # Count quantities per tool name
     from collections import Counter
     pre_counts  = Counter(t["name"] for t in pre_tools)
     post_counts = Counter(t["name"] for t in post_tools)
-
     present, missing, extra = [], [], []
 
     for name, pre_qty in pre_counts.items():
         post_qty = post_counts.get(name, 0)
         if post_qty >= pre_qty:
-            # All accounted for
-            matched = [t for t in post_tools if t["name"] == name][:pre_qty]
-            present.extend(matched)
+            present.extend([t for t in post_tools if t["name"] == name][:pre_qty])
         elif post_qty > 0:
-            # Partially present
-            matched = [t for t in post_tools if t["name"] == name]
-            present.extend(matched)
+            present.extend([t for t in post_tools if t["name"] == name])
             for _ in range(pre_qty - post_qty):
                 missing.append({"name": name, "expected": pre_qty, "found": post_qty})
         else:
-            # Completely missing
             missing.append({"name": name, "expected": pre_qty, "found": 0})
 
     for name, post_qty in post_counts.items():
         pre_qty = pre_counts.get(name, 0)
         if post_qty > pre_qty:
-            extra_tools = [t for t in post_tools if t["name"] == name][pre_qty:]
-            extra.extend(extra_tools)
+            extra.extend([t for t in post_tools if t["name"] == name][pre_qty:])
 
     all_ok = len(missing) == 0
     missing_summary = ", ".join(
