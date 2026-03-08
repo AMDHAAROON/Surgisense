@@ -23,7 +23,7 @@ export default function Home() {
         </div>
 
         {/* Heading — smooth scale across all breakpoints */}
-        <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-8xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-b from-foreground to-foreground/60 leading-[1.1] animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-100">
+        <h1 className="text-[40px] sm:text-5xl md:text-6xl lg:text-8xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-b from-foreground to-foreground/60 leading-[1.1] animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-100">
           Precision Visual <br />
           <span className="text-primary text-3xl sm:text-5xl md:text-6xl lg:text-7xl text-glow italic">
             Intelligence
