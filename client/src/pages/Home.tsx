@@ -12,29 +12,38 @@ export default function Home() {
 
   return (
     <div className="space-y-24">
-      <section className="relative pt-12 text-center max-w-4xl mx-auto space-y-10">
-        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[600px] h-[300px] bg-primary/10 blur-[120px] rounded-full -z-10" />
-        
-        <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-primary/10 border border-primary/20 text-primary text-xs font-bold uppercase tracking-widest animate-in fade-in slide-in-from-top-4 duration-1000">
+      <section className="relative pt-20 sm:pt-20 md:pt-16 text-center max-w-4xl mx-auto space-y-6 sm:space-y-8 px-2">
+        {/* Glow — scaled down on mobile */}
+        <div className="absolute top-0 left-1/2 -translate-x-1/2 w-[280px] sm:w-[450px] lg:w-[600px] h-[150px] sm:h-[220px] lg:h-[300px] bg-primary/10 blur-[80px] sm:blur-[120px] rounded-full -z-10" />
+
+        {/* Badge */}
+        <div className="inline-flex items-center gap-2 px-3 sm:px-4 py-1.5 rounded-full bg-primary/10 border border-primary/20 text-primary text-[10px] sm:text-xs font-bold uppercase tracking-widest animate-in fade-in slide-in-from-top-4 duration-1000">
           <div className="h-1.5 w-1.5 rounded-full bg-primary animate-pulse" />
           Next-Gen Analysis
         </div>
 
-        <h1 className="text-5xl sm:text-6xl font-black tracking-tight lg:text-8xl bg-clip-text text-transparent bg-gradient-to-b from-foreground to-foreground/60 leading-[1.1] animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-100">
-          Precision<br className="block sm:hidden"/> Visual <br /> <span className="text-primary text-[2.5rem] xs:text-5xl sm:text-7xl text-glow italic ">Intelligence</span>
+        {/* Heading — smooth scale across all breakpoints */}
+        <h1 className="text-4xl sm:text-5xl md:text-6xl lg:text-8xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-b from-foreground to-foreground/60 leading-[1.1] animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-100">
+          Precision Visual <br />
+          <span className="text-primary text-3xl sm:text-5xl md:text-6xl lg:text-7xl text-glow italic">
+            Intelligence
+          </span>
         </h1>
-        
-        <p className="text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-200">
+
+        {/* Subtext — smaller on mobile */}
+        <p className="text-sm sm:text-base md:text-xl text-muted-foreground max-w-xl sm:max-w-2xl mx-auto leading-relaxed animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-200 px-2">
           The world's most advanced real-time surgical tool tracking system. Monitor, validate, and excel with sub-millisecond precision.
         </p>
 
-        <div className="flex flex-col sm:flex-row justify-center gap-4 animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-300">
-          <Link href="/test">
-            <Button size="lg" className="h-14 px-10 rounded-full text-lg font-bold gap-3 shadow-2xl shadow-primary/20 hover:scale-105 transition-transform active:scale-95 border-emerald-400">
-              <Play className="h-5 w-5 fill-current" /> Start Validation
+        {/* Buttons — full width on mobile, auto on sm+ */}
+        <div className="flex flex-col sm:flex-row justify-center gap-3 sm:gap-4 animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-300 px-4 sm:px-0">
+          <Link href="/test" className="w-full sm:w-auto">
+            <Button size="lg" className="w-full sm:w-auto h-12 sm:h-14 px-6 sm:px-10 rounded-full text-base sm:text-lg font-bold gap-3 shadow-2xl shadow-primary/20 hover:scale-105 transition-transform active:scale-95 border border-emerald-400">
+              <Play className="h-4 w-4 sm:h-5 sm:w-5 fill-current" /> Start Validation
             </Button>
           </Link>
-          <Button variant="outline" size="lg" onClick={() => window.location.reload()} className="h-14 px-10 rounded-full text-lg font-bold bg-background/50 backdrop-blur-sm border-2">
+          <Button variant="outline" size="lg" onClick={() => window.location.reload()}
+            className="w-full sm:w-auto h-12 sm:h-14 px-6 sm:px-10 rounded-full text-base sm:text-lg font-bold bg-background/50 backdrop-blur-sm border-2">
             Refresh System
           </Button>
         </div>
@@ -42,7 +51,7 @@ export default function Home() {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         <div className="lg:col-span-8 group">
-          <div className="glass-card overflow-hidden ">
+          <div className="glass-card ">
             <div className="p-4 border-b border-white/10 flex items-center justify-between bg-muted/10 ">
               <div className="flex items-center gap-3">
                 <div className="bg-primary/20 p-2 rounded-xl">
