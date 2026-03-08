@@ -82,7 +82,7 @@ export default function Test() {
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-8">
+    <div className="max-w-6xl mx-auto space-y-12 py-12">
       {!testStarted ? (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
           <div className="text-center space-y-2 mt-20 sm:mt-7">
@@ -128,7 +128,7 @@ export default function Test() {
                 <div className="flex justify-between items-end">
                   <div className="space-y-1">
                     <CardDescription>Overall Progress</CardDescription>
-                    <CardTitle className="text-2xl">{Math.round(progress)}% Complete</CardTitle>
+                    <CardTitle className="text-[20px] sm:text-2xl">{Math.round(progress)}% Complete</CardTitle>
                   </div>
                   <div className="text-sm font-medium text-muted-foreground">
                     {completedStages.length} of {stages.length} Stages
@@ -152,7 +152,7 @@ export default function Test() {
                   <div className="space-y-6">
                     <div className="space-y-2">
                       <Badge className="mb-2">Stage {currentStageIdx + 1}</Badge>
-                      <h3 className="text-2xl font-bold">{currentStage.name}</h3>
+                      <h3 className="text-[20px] sm:text-2xl font-bold">{currentStage.name}</h3>
                       <div className="flex items-center gap-2 p-3 rounded-lg bg-primary/5 border border-primary/10">
                         <AlertCircle className="h-5 w-5 text-primary" />
                         <span className="text-sm font-medium">
