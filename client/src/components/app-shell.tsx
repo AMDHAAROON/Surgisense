@@ -1,6 +1,6 @@
 import { PropsWithChildren } from "react";
 import { Link, useLocation } from "wouter";
-import { Activity, FlaskConical, Home, Info, Moon, Sun } from "lucide-react";
+import { Activity, FlaskConical, Home, Info, Moon, Sun,Package } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/components/theme/use-theme";
@@ -40,6 +40,7 @@ export function AppShell({ children }: PropsWithChildren) {
             <nav className="hidden md:flex items-center gap-2 p-1 bg-muted/30 rounded-full border border-border/50">
               <NavLink href="/" icon={Home} label="Home" />
               <NavLink href="/test" icon={FlaskConical} label="Test" />
+              <NavLink href="/inventory" icon={Package} label="Inventory" />
               <NavLink href="/about" icon={Info} label="About" />
             </nav>
           </div>
