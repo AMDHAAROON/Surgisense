@@ -11,10 +11,10 @@ import { Mail, Send, User, AtSign, Github, Linkedin, Twitter } from "lucide-reac
 
 export default function About() {
   const devs = [
-    { name: "saarathy", role: "", focus: "", initials: "SG" },
-    { name: "Vishal", role: "", focus: "", initials: "VR" },
-    { name: "Subhash", role: "", focus: "", initials: "SB" },
-    { name: "Haaroon", role: "", focus: "", initials: "AM" },
+    { name: "saarathy", role: "", focus: "", initials: "SS" },
+    { name: "Vishal", role: "", focus: "", initials: "V" },
+    { name: "Subash", role: "", focus: "", initials: "SB" },
+    { name: "Haaroon", role: "", focus: "", initials: "MH" },
   ];
 
   const { toast } = useToast();
@@ -35,13 +35,13 @@ export default function About() {
   return (
     <div className="max-w-5xl mx-auto space-y-16 py-8">
       <section className="text-center space-y-4">
-        <h1 className="text-4xl font-bold tracking-tight">The Team Behind SurgiTrack</h1>
+        <h1 className="text-4xl font-bold tracking-tight">The Team Behind Surgisense</h1>
         <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
           We're a dedicated group of engineers and designers focused on making surgical training safer and more data-driven.
         </p>
       </section>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 cursor-pointer">
         {devs.map((dev) => (
           <Card key={dev.name} className="border-none shadow-sm hover:shadow-md transition-all text-center">
             <CardContent className="pt-8 pb-6 space-y-4">
@@ -51,13 +51,13 @@ export default function About() {
                 </AvatarFallback>
               </Avatar>
               <div className="space-y-1">
-                <h3 className="font-bold text-lg">{dev.name}</h3>
+                <h3 className="font-bold text-lg  ">{dev.name}</h3>
                 <p className="text-sm text-primary font-medium">{dev.role}</p>
               </div>
               <Badge variant="secondary" className="text-[10px] uppercase tracking-wider">{dev.focus}</Badge>
               <div className="flex justify-center gap-2 pt-2">
-                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary"><Github className="h-4 w-4" /></Button>
-                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-primary"><Twitter className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground hover:text-white"><Github className="h-4 w-4" /></Button>
+                <Button variant="ghost" size="icon" className="h-8 w-8 text-muted-foreground  hover:text-blue-500"><Linkedin className="h-4 w-4" /></Button>
               </div>
             </CardContent>
           </Card>
@@ -75,7 +75,7 @@ export default function About() {
               <div className="h-10 w-10 rounded-full bg-primary/5 flex items-center justify-center text-primary">
                 <Mail className="h-5 w-5" />
               </div>
-              <span>contact@surgitrack.io</span>
+              <span>mail block</span>
             </div>
           </div>
         </div>
@@ -89,7 +89,7 @@ export default function About() {
                   <div className="relative">
                     <User className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                     <Input 
-                      placeholder="John Doe" 
+                      placeholder="your name" 
                       className="pl-9" 
                       value={formData.name}
                       onChange={e => setFormData({...formData, name: e.target.value})}
@@ -103,7 +103,7 @@ export default function About() {
                     <AtSign className="absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
                     <Input 
                       type="email" 
-                      placeholder="john@example.com" 
+                      placeholder="abc@example.com" 
                       className="pl-9" 
                       value={formData.email}
                       onChange={e => setFormData({...formData, email: e.target.value})}
@@ -122,7 +122,7 @@ export default function About() {
                   required
                 />
               </div>
-              <Button type="submit" className="w-full h-11 text-base gap-2" disabled={create.isPending}>
+              <Button type="submit" className="w-full h-11 text-base gap-2 border-emerald-400" disabled={create.isPending}>
                 {create.isPending ? "Sending..." : "Send Message"} <Send className="h-4 w-4" />
               </Button>
             </form>

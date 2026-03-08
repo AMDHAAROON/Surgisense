@@ -24,7 +24,7 @@ export function ProcedurePicker({
   );
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-2 ">
       <p className="text-sm font-semibold">Procedure</p>
       <Select
         value={value ? String(value) : undefined}

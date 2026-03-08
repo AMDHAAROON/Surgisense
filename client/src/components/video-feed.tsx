@@ -36,7 +36,7 @@ export function VideoFeed({ className }: { className?: string }) {
   };
 
   return (
-    <div className={cn("relative bg-black w-full overflow-hidden", className)}>
+    <div className={cn("relative bg-black w-full overflow-hidden h-[38vh]  sm:h-[65vh] md:h-[45vh] lg:h-[50vh]", className)}>
 
       {/* Live badge — only when active */}
       {active && (
@@ -96,9 +96,9 @@ export function VideoFeed({ className }: { className?: string }) {
             <Button
               onClick={handleStart}
               disabled={loading}
-              className="gap-2 mt-2"
+              className="gap-2 mt-2 border-emerald-400"
             >
-              <Camera className="h-4 w-4" />
+              <Camera className="h-4 w-4 border-emerald-400" />
               {loading ? "Starting..." : "Start Camera"}
             </Button>
           </div>
