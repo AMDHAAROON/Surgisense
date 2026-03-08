@@ -7,6 +7,7 @@ import NotFound from "@/pages/not-found";
 import Home from "@/pages/Home";
 import Test from "@/pages/Test";
 import About from "@/pages/About";
+import Inventory from "@/pages/Inventory";
 import { ThemeProvider } from "@/components/theme/use-theme";
 import { AppShell } from "@/components/app-shell";
 import { SurgiBot } from "@/components/surgibot";
@@ -17,6 +18,7 @@ function Router() {
       <Route path="/" component={Home} />
       <Route path="/test" component={Test} />
       <Route path="/about" component={About} />
+      <Route path="/inventory" component={Inventory} />
       <Route component={NotFound} />
     </Switch>
   );
