@@ -85,7 +85,7 @@ export default function Test() {
     <div className="max-w-6xl mx-auto space-y-8">
       {!testStarted ? (
         <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-          <div className="text-center space-y-2">
+          <div className="text-center space-y-2 mt-20 sm:mt-7">
             <h1 className="text-3xl font-bold">Select a Procedure</h1>
             <p className="text-muted-foreground">Choose a surgical workflow to begin your validation test.</p>
           </div>

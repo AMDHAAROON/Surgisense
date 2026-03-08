@@ -20,8 +20,8 @@ export default function Home() {
           Next-Gen Analysis
         </div>
 
-        <h1 className="text-6xl font-black tracking-tight lg:text-8xl bg-clip-text text-transparent bg-gradient-to-b from-foreground to-foreground/60 leading-[1.1] animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-100">
-          Precision Visual <br /> <span className="text-primary text-glow italic">Intelligence</span>
+        <h1 className="text-5xl sm:text-6xl font-black tracking-tight lg:text-8xl bg-clip-text text-transparent bg-gradient-to-b from-foreground to-foreground/60 leading-[1.1] animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-100">
+          Precision<br className="block sm:hidden"/> Visual <br /> <span className="text-primary text-[2.5rem] xs:text-5xl sm:text-7xl text-glow italic ">Intelligence</span>
         </h1>
         
         <p className="text-xl text-muted-foreground max-w-2xl mx-auto leading-relaxed animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-200">
@@ -30,7 +30,7 @@ export default function Home() {
 
         <div className="flex flex-col sm:flex-row justify-center gap-4 animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-300">
           <Link href="/test">
-            <Button size="lg" className="h-14 px-10 rounded-full text-lg font-bold gap-3 shadow-2xl shadow-primary/20 hover:scale-105 transition-transform active:scale-95">
+            <Button size="lg" className="h-14 px-10 rounded-full text-lg font-bold gap-3 shadow-2xl shadow-primary/20 hover:scale-105 transition-transform active:scale-95 border-emerald-400">
               <Play className="h-5 w-5 fill-current" /> Start Validation
             </Button>
           </Link>
@@ -42,15 +42,15 @@ export default function Home() {
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
         <div className="lg:col-span-8 group">
-          <div className="glass-card overflow-hidden">
-            <div className="p-6 border-b border-white/10 flex items-center justify-between bg-muted/10">
+          <div className="glass-card overflow-hidden ">
+            <div className="p-4 border-b border-white/10 flex items-center justify-between bg-muted/10 ">
               <div className="flex items-center gap-3">
                 <div className="bg-primary/20 p-2 rounded-xl">
                   <Eye className="h-5 w-5 text-primary" />
                 </div>
-                <div>
-                  <h2 className="font-bold text-lg">System Eye</h2>
-                  <p className="text-xs text-muted-foreground uppercase tracking-widest font-bold"> Stream Processing</p>
+                <div >
+                  <h2 className="font-bold text-sm sm:text-lg">System Eye</h2>
+                  <p className="text-xs text-muted-foreground uppercase tracking-normal sm:tracking-wide font-semibold"> Stream Processing</p>
                 </div>
               </div>
               <div className="flex items-center gap-2 bg-green-500/10 text-green-500 px-3 py-1 rounded-full text-[10px] font-black uppercase tracking-tighter">
@@ -89,7 +89,7 @@ export default function Home() {
 
       <section className="space-y-16 py-24">
         <div className="text-center space-y-4">
-          <h2 className="text-4xl font-black tracking-tight">System Capabilities</h2>
+          <h2 className="text-2xl sm:text-4xl font-black tracking-tight">System Capabilities</h2>
           <div className="h-1 w-24 bg-primary mx-auto rounded-full" />
         </div>
         
@@ -105,7 +105,7 @@ export default function Home() {
                 <item.icon className="h-8 w-8 text-primary group-hover:text-white transition-colors" />
               </div>
               <div className="space-y-2">
-                <h3 className="font-black text-xl tracking-tight">{item.title}</h3>
+                <h3 className="font-black text-lg sm:text-xl tracking-tight">{item.title}</h3>
                 <p className="text-muted-foreground leading-relaxed text-sm">{item.desc}</p>
               </div>
             </div>

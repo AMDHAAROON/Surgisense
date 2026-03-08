@@ -65,7 +65,7 @@ export function SurgiBot() {
     } catch {
       setMessages((prev) => [
         ...prev,
-        { role: "assistant", content: "⚠️ Connection error. Is the backend running?" },
+        { role: "assistant", content: "⚠️ Connection error. Try again later" },
       ]);
     } finally {
       setLoading(false);
@@ -151,6 +151,7 @@ export function SurgiBot() {
                   <div className="h-7 w-7 rounded-full bg-primary/10 flex items-center justify-center mr-2 mt-0.5 shrink-0">
                     <Bot className="h-3.5 w-3.5 text-primary" />
                   </div>
+                  
                 )}
                 <div
                   className={cn(
@@ -163,6 +164,7 @@ export function SurgiBot() {
                   {msg.content}
                 </div>
               </div>
+              
             ))}
 
             {loading && (
@@ -189,7 +191,7 @@ export function SurgiBot() {
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={onKey}
               placeholder="Ask about tools, procedures..."
-              className="flex-1 rounded-full bg-background/60 border-border/50 text-sm h-10 px-4"
+              className="flex-1 rounded-full bg-background/60 border-border/50 text-sm h-10 px-4 "
               disabled={loading}
             />
             <Button
@@ -202,7 +204,7 @@ export function SurgiBot() {
             </Button>
           </div>
           <p className="text-center text-[10px] text-muted-foreground mt-2 font-mono">
-            Powered by Gemini · Press Enter to send
+            Powered by <span className="border-b border-gray-400"> Gemini</span> · Press Enter to send
           </p>
         </div>
       </div>

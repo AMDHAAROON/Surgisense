@@ -1,0 +1,5 @@
+appshell.tsx--->navbar and footer
+home.jsx-->homepage ,hero section
+about.jsx-->about page
+test.jsx-->testing part
+notfound.tsx-->page not found
