@@ -19,9 +19,9 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      "/api":    { target: "http://localhost:8000", changeOrigin: true },
-      "/stream": { target: "http://localhost:8000", changeOrigin: true },
-      "/ws":     { target: "ws://localhost:8000",   ws: true },
-    },
+  '/api':    'http://192.168.1.5:8000',
+  '/stream': 'http://192.168.1.5:8000',
+  '/ws':     'ws://192.168.1.5:8000',
+},
   },
 });
