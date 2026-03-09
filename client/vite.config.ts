@@ -10,9 +10,15 @@ export default defineConfig({
       "@shared": path.resolve(__dirname, "..", "shared"),
     },
   },
+  optimizeDeps: {
+    include: ["zod"],
+  },
   build: {
     outDir: path.resolve(__dirname, "dist"),
     emptyOutDir: true,
+    rollupOptions: {
+      external: [],
+    },
   },
   server: {
     port: 5173,
