@@ -8,17 +8,12 @@ export default defineConfig({
     alias: {
       "@": path.resolve(__dirname, "src"),
       "@shared": path.resolve(__dirname, "..", "shared"),
+      "zod": path.resolve(__dirname, "node_modules/zod"),
     },
-  },
-  optimizeDeps: {
-    include: ["zod"],
   },
   build: {
     outDir: path.resolve(__dirname, "dist"),
     emptyOutDir: true,
-    rollupOptions: {
-      external: [],
-    },
   },
   server: {
     port: 5173,
