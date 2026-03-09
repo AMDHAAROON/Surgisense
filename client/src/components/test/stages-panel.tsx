@@ -1,11 +1,11 @@
 import { useMemo } from "react";
-import { Stage } from "@shared/schema";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { cn } from "@/lib/utils";
 import { CheckCircle2, CircleDashed, Wrench } from "lucide-react";
 import { normalizeToolKey } from "@/hooks/use-tool-detection";
 
+type Stage = { id: number; procedureId: number; name: string; requiredTool: string; order: number; };
 function StageRow({
   stage,
   index,

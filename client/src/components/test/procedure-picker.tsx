@@ -1,8 +1,8 @@
 import { useMemo } from "react";
-import { Procedure } from "@shared/schema";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 
+type Procedure = { id: number; name: string; description: string; };
 export function ProcedurePicker({
   procedures,
   value,
