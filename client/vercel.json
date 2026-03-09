@@ -1,5 +1,10 @@
 {
   "rewrites": [
     { "source": "/(.*)", "destination": "/index.html" }
-  ]
+  ],
+  "dependencies": {
+  "vite": "^5.0.0",
+  "@vitejs/plugin-react": "^4.0.0",
+  "typescript": "^5.0.0"
+}
 }
