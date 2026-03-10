@@ -1,17 +1,13 @@
 # backend/server.py - SurgiSense Backend
 import asyncio
 import time
-import threading
 import base64
 import json
 import urllib.request
 import urllib.error
-import cv2
-import numpy as np
-from collections import deque
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Body
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import JSONResponse
 import uvicorn
 import sys, os
 import psycopg2
@@ -36,13 +32,8 @@ app.add_middleware(
 )
 
 # ── Shared state ──────────────────────────────────────────────────────────────
-latest_frame: bytes | None = None
-latest_data:  dict         = {}
-frame_lock    = threading.Lock()
-data_lock     = threading.Lock()
 ws_clients: list[WebSocket] = []
-camera_active = threading.Event()
-
+latest_detection: dict = {}
 
 # ══════════════════════════════════════════════════════════════════════════════
 #  CONFIG
@@ -64,7 +55,7 @@ SURGICAL_TOOLS = [
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  GROQ — Live feed tool detection
+#  GROQ — Live feed tool detection (accepts base64 from browser)
 # ══════════════════════════════════════════════════════════════════════════════
 GROQ_PROMPT = f"""You are a surgical tool detection system.
 Look at the image and identify any surgical instrument visible.
@@ -80,7 +71,6 @@ CONFIDENCE: low"""
 
 
 def _groq_post(payload_bytes: bytes) -> dict:
-    """Shared Groq HTTP call (httpx with urllib fallback)."""
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type":  "application/json",
@@ -99,17 +89,15 @@ def _groq_post(payload_bytes: bytes) -> dict:
             return json.loads(resp.read().decode())
 
 
-def call_groq_vision(frame: np.ndarray) -> dict | None:
-    """Detect a single tool from a live camera frame."""
+def call_groq_vision(image_b64: str) -> dict | None:
+    """Detect a single tool from a base64 image sent by the browser."""
     if not GROQ_API_KEY:
         return None
-    _, buffer = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 80])
-    image_b64 = base64.b64encode(buffer).decode("utf-8")
     payload = json.dumps({
         "model": GROQ_MODEL,
         "messages": [{"role": "user", "content": [
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
-            {"type": "text",      "text": GROQ_PROMPT}
+            {"type": "text", "text": GROQ_PROMPT}
         ]}],
         "max_tokens": 60,
         "temperature": 0.1,
@@ -162,7 +150,6 @@ Return [] if no instruments visible."""
 
 
 def _iou(a: dict, b: dict) -> float:
-    """Intersection over Union for two normalized boxes."""
     ix1 = max(a["x1"], b["x1"]); iy1 = max(a["y1"], b["y1"])
     ix2 = min(a["x2"], b["x2"]); iy2 = min(a["y2"], b["y2"])
     inter = max(0, ix2 - ix1) * max(0, iy2 - iy1)
@@ -174,7 +161,6 @@ def _iou(a: dict, b: dict) -> float:
 
 
 def _nms_deduplicate(tools: list, iou_thresh: float = 0.4) -> list:
-    """Non-Maximum Suppression per tool name — keeps highest-confidence detection when boxes overlap."""
     if not tools:
         return tools
     from collections import defaultdict
@@ -194,13 +180,11 @@ def _nms_deduplicate(tools: list, iou_thresh: float = 0.4) -> list:
                     used[j] = True
             kept.append(a)
             used[i] = True
-        print(f"[NMS] {name}: {len(group)} → {len(kept)} kept")
         result.extend(kept)
     return result
 
 
 def _gemini_inventory(image_b64: str) -> list:
-    """Use Gemini 2.5 Flash to detect tools with bounding boxes."""
     payload = json.dumps({
         "contents": [{
             "parts": [
@@ -210,45 +194,33 @@ def _gemini_inventory(image_b64: str) -> list:
         }],
         "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.1}
     }).encode("utf-8")
-
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
     try:
         req = urllib.request.Request(url, data=payload,
                                      headers={"Content-Type": "application/json"}, method="POST")
         with urllib.request.urlopen(req, timeout=30) as resp:
             result = json.loads(resp.read().decode())
-
         raw = result["candidates"][0]["content"]["parts"][0]["text"].strip()
-        print(f"[Gemini Inventory] Raw: {raw[:400]}")
-
         if "```" in raw:
             raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
+            if raw.startswith("json"): raw = raw[4:]
         raw = raw.strip()
-
         items = json.loads(raw)
         if not isinstance(items, list):
             return []
-
         valid = []
         for t in items:
-            # Format 1 — Gemini native: {"box_2d": [y1,x1,y2,x2], "label": "name"} 0-1000 scale
             if "box_2d" in t:
                 coords = t["box_2d"]
                 y1 = max(0.0, coords[0] / 1000); x1 = max(0.0, coords[1] / 1000)
                 y2 = min(1.0, coords[2] / 1000); x2 = min(1.0, coords[3] / 1000)
                 name = t.get("label", "unknown").lower().replace(" ", "_")
                 conf = float(t.get("confidence", 0.85))
-
-            # Format 2 — Flat: {"name":..., "x1":..., "y1":..., "x2":..., "y2":...}
             elif "x1" in t:
                 x1 = max(0.0, float(t.get("x1", 0))); y1 = max(0.0, float(t.get("y1", 0)))
                 x2 = min(1.0, float(t.get("x2", 1))); y2 = min(1.0, float(t.get("y2", 1)))
                 name = t.get("name", "unknown").lower().replace(" ", "_")
                 conf = float(t.get("confidence", 0.7))
-
-            # Format 3 — Nested: {"name":..., "box": {x1,y1,x2,y2}}
             elif "box" in t and isinstance(t["box"], dict):
                 box  = t["box"]
                 x1 = max(0.0, float(box.get("x1", 0))); y1 = max(0.0, float(box.get("y1", 0)))
@@ -256,21 +228,13 @@ def _gemini_inventory(image_b64: str) -> list:
                 name = t.get("name", "unknown").lower().replace(" ", "_")
                 conf = float(t.get("confidence", 0.7))
             else:
-                print(f"[Gemini Inventory] Unknown format: {t}")
                 continue
-
             if x2 <= x1 or y2 <= y1:
                 continue
-
             valid.append({"name": name, "confidence": conf,
                           "box": {"x1": x1, "y1": y1, "x2": x2, "y2": y2}})
-            print(f"[Gemini Inventory] {name} ({conf:.0%}) box=({x1:.3f},{y1:.3f},{x2:.3f},{y2:.3f})")
-
-        print(f"[Gemini Inventory] {len(valid)} tools before NMS")
         valid = _nms_deduplicate(valid)
-        print(f"[Gemini Inventory] {len(valid)} tools after NMS")
         return valid
-
     except urllib.error.HTTPError as e:
         try: err = json.loads(e.read().decode()).get("error", {}).get("message", str(e))
         except: err = str(e)
@@ -282,7 +246,6 @@ def _gemini_inventory(image_b64: str) -> list:
 
 
 def _groq_inventory_fallback(image_b64: str) -> list:
-    """Fallback when no Gemini key: Groq with approximate boxes."""
     PROMPT = f"""You are a surgical instrument inventory system.
 List every surgical instrument visible in this image.
 Known instruments: {", ".join(SURGICAL_TOOLS)}.
@@ -311,149 +274,13 @@ Return [] if nothing visible."""
 
 
 def scan_inventory(image_b64: str) -> list:
-    """Main inventory entry point: Gemini 2.5 Flash → Groq fallback."""
     if GEMINI_API_KEY:
         return _gemini_inventory(image_b64)
     elif GROQ_API_KEY:
-        print("[Inventory] No Gemini key — using Groq fallback")
         return _groq_inventory_fallback(image_b64)
     else:
-        print("[Inventory] No API key found — set GEMINI_API_KEY in .env")
+        print("[Inventory] No API key found")
         return []
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-#  DETECTOR THREAD — Groq vision every 3s, MJPEG stream
-# ══════════════════════════════════════════════════════════════════════════════
-def detector_thread():
-    global latest_frame, latest_data
-
-    GROQ_EVERY_SEC = 3
-    TOOL_EXPIRE    = 10
-    CAMERA_INDEX   = int(os.environ.get("CAMERA_INDEX", "0"))
-
-    print("\n" + "="*60)
-    print("SurgiSense — Groq Vision Detector")
-    print("="*60)
-    if GROQ_API_KEY:
-        print(f"  ✓ Groq key loaded  |  Model: {GROQ_MODEL}")
-        print(f"  ✓ Scanning every {GROQ_EVERY_SEC}s (non-blocking)")
-    else:
-        print("  ⚠ No GROQ_API_KEY — add it to backend/.env")
-    if GEMINI_API_KEY:
-        print("  ✓ Gemini key loaded  |  Inventory + Chat ready")
-    else:
-        print("  ⚠ No GEMINI_API_KEY — inventory will use Groq fallback")
-    print("="*60 + "\n")
-
-    fps_history    = deque(maxlen=30)
-    last_time      = time.time()
-    last_groq_time = 0
-    groq_running   = threading.Event()
-    current_tools  = {}
-    pending_events = []
-    last_printed   = {}
-    REPRINT_AFTER  = 10
-
-    def groq_worker(frame_copy):
-        result = call_groq_vision(frame_copy)
-        now = time.time()
-        if result:
-            name = result["name"]
-            current_tools[name] = {**result, "last_seen": now}
-            if name not in last_printed or (now - last_printed.get(name, 0)) > REPRINT_AFTER:
-                ts = time.strftime("%Y-%m-%d %H:%M:%S")
-                print(f"[{ts}] ✅ DETECTED  | {name}  ({result['confidence']:.0%})")
-                last_printed[name] = now
-                pending_events.append(result.copy())
-        else:
-            print(f"[{time.strftime('%H:%M:%S')}] No tool detected")
-        groq_running.clear()
-
-    cap = None
-
-    while True:
-        if not camera_active.is_set():
-            if cap is not None:
-                cap.release()
-                cap = None
-                print("[Camera] Hardware released — light off")
-            with frame_lock:
-                latest_frame = None
-            with data_lock:
-                latest_data = {}
-            time.sleep(0.2)
-            continue
-
-        if cap is None:
-            cap = cv2.VideoCapture(CAMERA_INDEX)
-            if not cap.isOpened():
-                print("ERROR: Could not open webcam")
-                time.sleep(1)
-                continue
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH,  640)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
-            cap.set(cv2.CAP_PROP_FPS,          30)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE,   1)
-            print("[Camera] Hardware opened — light on")
-
-        ret, frame = cap.read()
-        if not ret:
-            time.sleep(0.05)
-            continue
-
-        H, W = frame.shape[:2]
-        now  = time.time()
-        fps_history.append(1.0 / max(now - last_time, 1e-5))
-        last_time = now
-        avg_fps   = float(np.mean(fps_history))
-
-        if GROQ_API_KEY and (now - last_groq_time) >= GROQ_EVERY_SEC and not groq_running.is_set():
-            last_groq_time = now
-            groq_running.set()
-            threading.Thread(target=groq_worker, args=(frame.copy(),), daemon=True).start()
-
-        # Expire old tools
-        for name in list(current_tools.keys()):
-            if now - current_tools[name]["last_seen"] > TOOL_EXPIRE:
-                del current_tools[name]
-                last_printed.pop(name, None)
-
-        # Draw detected tools on frame
-        y_offset = 120
-        for tool in current_tools.values():
-            label = f"{tool['name'].replace('_', ' ')}  {tool['confidence']:.0%}"
-            (tw, th), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.7, 2)
-            cv2.rectangle(frame, (10, y_offset - th - 8), (10 + tw + 10, y_offset + 8), (0, 200, 0), -1)
-            cv2.putText(frame, label, (15, y_offset), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
-            y_offset += 40
-
-        # Draw HUD bar
-        cv2.rectangle(frame, (0, 0), (W, 100), (0, 0, 0), -1)
-        cv2.rectangle(frame, (0, 0), (W, 100), (255, 255, 255), 2)
-        fps_color = (0, 255, 0) if avg_fps >= 20 else (0, 165, 255) if avg_fps >= 10 else (0, 0, 255)
-        cv2.putText(frame, f"FPS: {avg_fps:.1f}", (W - 150, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, fps_color, 2)
-        cv2.putText(frame, f"Tools: {len(current_tools)}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7,
-                    (0, 255, 0) if current_tools else (200, 200, 200), 2)
-        next_call = max(0, GROQ_EVERY_SEC - (now - last_groq_time))
-        cv2.putText(frame, f"Next scan: {next_call:.1f}s", (10, 65), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 200, 200), 1)
-
-        _, jpeg = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, 70])
-        with frame_lock:
-            latest_frame = jpeg.tobytes()
-
-        with data_lock:
-            latest_data = {
-                "fps":       round(avg_fps, 1),
-                "hands":     0,
-                "tools":     [{"name": t["name"], "confidence": t["confidence"], "status": t["status"]}
-                               for t in current_tools.values()],
-                "events":    pending_events.copy(),
-                "timestamp": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            }
-            pending_events.clear()
-
-    cap.release()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -565,22 +392,40 @@ def init_db():
 async def startup():
     init_db()
     print("✓ PostgreSQL database ready")
-    threading.Thread(target=detector_thread, daemon=True).start()
-    print("✓ Detector thread started")
+    print("✓ SurgiSense backend ready — camera runs in browser")
 
 
-# ── MJPEG stream ──────────────────────────────────────────────────────────────
-def mjpeg_generator():
-    while True:
-        with frame_lock:
-            frame = latest_frame
-        if frame:
-            yield (b'--frame\r\nContent-Type: image/jpeg\r\n\r\n' + frame + b'\r\n')
-        time.sleep(0.033)
+# ── Live detection — browser sends frame every 3s ─────────────────────────────
+@app.post("/api/detect")
+async def detect(body: dict = Body(...)):
+    image_b64 = body.get("image", "")
+    if not image_b64:
+        return JSONResponse({"error": "No image provided"}, status_code=400)
+    if "," in image_b64:
+        image_b64 = image_b64.split(",", 1)[1]
 
-@app.get("/stream/video")
-def video_stream():
-    return StreamingResponse(mjpeg_generator(), media_type="multipart/x-mixed-replace; boundary=frame")
+    result = call_groq_vision(image_b64)
+    now    = time.strftime("%Y-%m-%dT%H:%M:%S")
+
+    data = {
+        "tools":     [result] if result else [],
+        "events":    [result] if result else [],
+        "timestamp": now,
+    }
+
+    # Only broadcast when tool detected
+    if result:
+        print(f"[Detect] ✅ {result['name']} ({result['confidence']:.0%})")
+        dead = []
+        for ws in ws_clients:
+            try:
+                await ws.send_json(data)
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            ws_clients.remove(ws)
+
+    return JSONResponse(data)
 
 
 # ── WebSocket ─────────────────────────────────────────────────────────────────
@@ -589,39 +434,15 @@ async def ws_detection(ws: WebSocket):
     await ws.accept()
     ws_clients.append(ws)
     print(f"[WS] Client connected. Total: {len(ws_clients)}")
-    last_tool_names = set()
     try:
         while True:
-            with data_lock:
-                data = dict(latest_data)
-            if data:
-                current_names = {t['name'] for t in data.get('tools', [])}
-                if bool(data.get('events')) or current_names != last_tool_names:
-                    await ws.send_json(data)
-                    last_tool_names = current_names
-            await asyncio.sleep(0.1)
+            await asyncio.sleep(30)  # keep alive
     except (WebSocketDisconnect, Exception):
         pass
     finally:
         if ws in ws_clients:
             ws_clients.remove(ws)
         print(f"[WS] Client disconnected. Total: {len(ws_clients)}")
-
-
-# ── Camera control ────────────────────────────────────────────────────────────
-@app.post("/api/camera/start")
-def camera_start():
-    camera_active.set()
-    return {"status": "started"}
-
-@app.post("/api/camera/stop")
-def camera_stop():
-    camera_active.clear()
-    return {"status": "stopped"}
-
-@app.get("/api/camera/status")
-def camera_status():
-    return {"active": camera_active.is_set()}
 
 
 # ── Procedures ────────────────────────────────────────────────────────────────
@@ -691,7 +512,7 @@ async def create_contact(body: dict):
     return JSONResponse({"success": True}, status_code=201)
 
 
-# ── Chat — Gemini SurgiBot ─────────────────────────────────────────────────────
+# ── Chat — Gemini SurgiBot ────────────────────────────────────────────────────
 @app.post("/api/chat")
 async def chat(body: dict):
     api_key = GEMINI_API_KEY
@@ -792,14 +613,12 @@ async def inventory_reconcile(body: dict = Body(...)):
                         "WHERE session_type='pre' ORDER BY created_at DESC LIMIT 1")
         row = cur.fetchone()
     if not row:
-        return JSONResponse({"error": "No pre-surgery inventory found. Scan before surgery first."}, status_code=404)
+        return JSONResponse({"error": "No pre-surgery inventory found."}, status_code=404)
     pre_tools = row["tools_json"]
-
     from collections import Counter
     pre_counts  = Counter(t["name"] for t in pre_tools)
     post_counts = Counter(t["name"] for t in post_tools)
     present, missing, extra = [], [], []
-
     for name, pre_qty in pre_counts.items():
         post_qty = post_counts.get(name, 0)
         if post_qty >= pre_qty:
@@ -810,12 +629,10 @@ async def inventory_reconcile(body: dict = Body(...)):
                 missing.append({"name": name, "expected": pre_qty, "found": post_qty})
         else:
             missing.append({"name": name, "expected": pre_qty, "found": 0})
-
     for name, post_qty in post_counts.items():
         pre_qty = pre_counts.get(name, 0)
         if post_qty > pre_qty:
             extra.extend([t for t in post_tools if t["name"] == name][pre_qty:])
-
     all_ok = len(missing) == 0
     missing_summary = ", ".join(
         f"{m['name']} (need {m['expected']}, found {m['found']})" for m in missing
@@ -835,9 +652,7 @@ async def inventory_reconcile(body: dict = Body(...)):
 # ── Health ────────────────────────────────────────────────────────────────────
 @app.get("/api/health")
 def health():
-    with data_lock:
-        d = dict(latest_data)
-    return {"status": "ok", "fps": d.get("fps", 0), "tools": len(d.get("tools", []))}
+    return {"status": "ok", "mode": "browser-camera"}
 
 
 if __name__ == "__main__":
