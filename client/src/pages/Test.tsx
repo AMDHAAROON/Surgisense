@@ -1,7 +1,6 @@
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useProcedures, useProcedureStages } from "@/hooks/use-procedures";
-import { useToolDetectionSocket } from "@/hooks/use-tool-detection";
-import { VideoFeed } from "@/components/video-feed";
+import { VideoFeed, DetectedTool } from "@/components/video-feed";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -14,46 +13,46 @@ import { useToast } from "@/hooks/use-toast";
 export default function Test() {
   const { data: procedures = [] } = useProcedures();
   const [selectedProcId, setSelectedProcId] = useState<number | null>(null);
-  const { data: stages = [] } = useProcedureStages(selectedProcId ?? 0);
-  const { last } = useToolDetectionSocket({ historyLimit: 10 });
-  const { toast } = useToast();
+  const { data: stages = [] }               = useProcedureStages(selectedProcId ?? 0);
+  const { toast }                           = useToast();
 
+  const [detectedTools,   setDetectedTools]   = useState<DetectedTool[]>([]);
   const [currentStageIdx, setCurrentStageIdx] = useState(0);
   const [completedStages, setCompletedStages] = useState<number[]>([]);
-  const [testStarted, setTestStarted] = useState(false);
-  const [showSummary, setShowSummary] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const [testStarted,     setTestStarted]     = useState(false);
+  const [showSummary,     setShowSummary]     = useState(false);
+  const [isSaving,        setIsSaving]        = useState(false);
 
-  const currentStage  = stages[currentStageIdx];
-  const detectedTools = last?.tools || [];
+  const currentStage   = stages[currentStageIdx];
   const isToolDetected = currentStage &&
     detectedTools.some(t => t.name === currentStage.requiredTool);
 
-  if (isToolDetected && testStarted && !completedStages.includes(currentStage.id)) {
-    setCompletedStages(prev => [...prev, currentStage.id]);
-    if (currentStageIdx < stages.length - 1) {
-      setCurrentStageIdx(prev => prev + 1);
+  // Auto-advance stage when correct tool detected
+  const handleDetection = useCallback((tools: DetectedTool[]) => {
+    setDetectedTools(tools);
+    if (!currentStage || !testStarted) return;
+    const matched = tools.some(t => t.name === currentStage.requiredTool);
+    if (matched && !completedStages.includes(currentStage.id)) {
+      setCompletedStages(prev => [...prev, currentStage.id]);
+      if (currentStageIdx < stages.length - 1) {
+        setCurrentStageIdx(prev => prev + 1);
+      }
     }
-  }
+  }, [currentStage, testStarted, completedStages, currentStageIdx, stages.length]);
 
-  const marks    = stages.length > 0
-    ? Math.round((completedStages.length / stages.length) * 100)
-    : 0;
-  const progress = stages.length > 0
-    ? (completedStages.length / stages.length) * 100
-    : 0;
+  const marks    = stages.length > 0 ? Math.round((completedStages.length / stages.length) * 100) : 0;
+  const progress = stages.length > 0 ? (completedStages.length / stages.length) * 100 : 0;
 
   const handleStart = (id: number) => {
     setSelectedProcId(id);
     setTestStarted(true);
     setCurrentStageIdx(0);
     setCompletedStages([]);
+    setDetectedTools([]);
   };
 
-  // "End & Finalize" just opens the summary dialog — no save yet
   const handleFinish = () => setShowSummary(true);
 
-  // "Save Result" inside the dialog POSTs to API then resets
   const handleSave = async () => {
     if (!selectedProcId) return;
     setIsSaving(true);
@@ -72,13 +71,13 @@ export default function Test() {
     }
   };
 
-  // "Start New Test" inside the dialog resets everything
   const handleReset = () => {
     setShowSummary(false);
     setTestStarted(false);
     setSelectedProcId(null);
     setCurrentStageIdx(0);
     setCompletedStages([]);
+    setDetectedTools([]);
   };
 
   return (
@@ -116,10 +115,12 @@ export default function Test() {
                     Live Procedure Stream
                   </CardTitle>
                 </div>
-                <Badge variant="outline" className="font-mono">FPS: {last?.fps || 0}</Badge>
+                <Badge variant="outline" className="font-mono">
+                  {detectedTools[0] ? detectedTools[0].name.replace(/_/g, " ") : "Scanning..."}
+                </Badge>
               </CardHeader>
               <CardContent className="p-0 bg-black aspect-video flex items-center justify-center">
-                <VideoFeed />
+                <VideoFeed onDetection={handleDetection} />
               </CardContent>
             </Card>
 
@@ -194,17 +195,10 @@ export default function Test() {
                 )}
               </CardContent>
               <div className="p-6 border-t bg-muted/5 space-y-3">
-                <Button
-                  onClick={handleFinish}
-                  className="w-full h-12 text-lg shadow-lg shadow-primary/20"
-                >
+                <Button onClick={handleFinish} className="w-full h-12 text-lg shadow-lg shadow-primary/20">
                   End &amp; Finalize Test
                 </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => setTestStarted(false)}
-                  className="w-full"
-                >
+                <Button variant="ghost" onClick={() => setTestStarted(false)} className="w-full">
                   <RotateCcw className="h-4 w-4 mr-2" /> Select Different Procedure
                 </Button>
               </div>
