@@ -9,7 +9,7 @@ SurgiSense is a real-time surgical tool tracking and training platform. It uses 
 - **Frontend** — React, TypeScript, TailwindCSS, shadcn/ui
 - **Backend** — Python, FastAPI, OpenCV, MediaPipe
 - **Database** — PostgreSQL
-- **AI** — Google Gemini (gemini-2.5-flash)
+- **AI** — Google Gemini (gemini-2.5 flash)
 
 ---
 
