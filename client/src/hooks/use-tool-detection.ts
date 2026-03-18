@@ -9,19 +9,24 @@ const toolSchema = z.object({
 });
 
 const detectionMessageSchema = z.object({
-  fps: z.number().optional(),
-  hands: z.number().optional(),
-  tools: z.array(toolSchema).default([]),
+  fps:       z.number().optional(),
+  hands:     z.number().optional(),
+  tools:     z.array(toolSchema).optional().default([]),
+  events:    z.array(toolSchema).optional().default([]),
+  timestamp: z.string().optional(),
 });
 
-export type DetectionTool = z.infer<typeof toolSchema>;
-export type DetectionMessage = z.infer<typeof detectionMessageSchema>;
+export type DetectionTool    = z.infer<typeof toolSchema>;
+export type DetectionMessage = z.infer<typeof detectionMessageSchema> & {
+  tools: DetectionTool[];
+  events: DetectionTool[];
+};
 
 export type ToolHistoryItem = {
-  at: Date;
-  fps?: number;
+  at:     Date;
+  fps?:   number;
   hands?: number;
-  tools: DetectionTool[];
+  tools:  DetectionTool[];
 };
 
 function safeParse<T>(schema: z.ZodSchema<T>, data: unknown): T | null {
@@ -37,16 +42,20 @@ export function normalizeToolKey(name: string) {
   return name.trim().toLowerCase().replace(/\s+/g, "_");
 }
 
+const WS_BASE = (import.meta.env.VITE_API_URL ?? "http://localhost:8000")
+  .replace(/^http/, "ws")
+  .replace(/\/$/, "");
+
 export function useToolDetectionSocket(opts?: { url?: string; historyLimit?: number }) {
-  const url = opts?.url ?? "ws://localhost:8000/ws/detection";
+  const url          = opts?.url ?? `${WS_BASE}/ws/detection`;
   const historyLimit = opts?.historyLimit ?? 140;
 
-  const wsRef = useRef<WebSocket | null>(null);
-  const [connected, setConnected] = useState(false);
-  const [last, setLast] = useState<DetectionMessage | null>(null);
-  const [history, setHistory] = useState<ToolHistoryItem[]>([]);
-  const reconnectAttempt = useRef(0);
-  const reconnectTimer = useRef<number | null>(null);
+  const wsRef             = useRef<WebSocket | null>(null);
+  const [connected,  setConnected]  = useState(false);
+  const [last,       setLast]       = useState<DetectionMessage | null>(null);
+  const [history,    setHistory]    = useState<ToolHistoryItem[]>([]);
+  const reconnectAttempt  = useRef(0);
+  const reconnectTimer    = useRef<number | null>(null);
 
   const toolsSet = useMemo(() => {
     const set = new Set<string>();
@@ -72,27 +81,22 @@ export function useToolDetectionSocket(opts?: { url?: string; historyLimit?: num
         ws.onclose = () => {
           if (cancelled) return;
           setConnected(false);
-
           const attempt = Math.min(reconnectAttempt.current + 1, 8);
           reconnectAttempt.current = attempt;
           const delay = Math.min(12000, 500 * 2 ** attempt);
-
           if (reconnectTimer.current) window.clearTimeout(reconnectTimer.current);
           reconnectTimer.current = window.setTimeout(connect, delay);
         };
 
-        ws.onerror = () => {
-          // onclose will handle reconnect
-        };
+        ws.onerror = () => {};
 
         ws.onmessage = (e) => {
           if (cancelled) return;
           try {
-            const raw = JSON.parse(e.data);
+            const raw    = JSON.parse(e.data);
             const parsed = safeParse(detectionMessageSchema, raw);
             if (!parsed) return;
-
-            setLast(parsed);
+            setLast(parsed as DetectionMessage);
             setHistory((prev) => {
               const next: ToolHistoryItem[] = [
                 ...prev,
@@ -115,18 +119,11 @@ export function useToolDetectionSocket(opts?: { url?: string; historyLimit?: num
     return () => {
       cancelled = true;
       if (reconnectTimer.current) window.clearTimeout(reconnectTimer.current);
-      try {
-        wsRef.current?.close();
-      } catch {
-        // ignore
-      }
+      try { wsRef.current?.close(); } catch {}
     };
   }, [url, historyLimit]);
 
-  const hasTool = (requiredTool: string) => {
-    const key = normalizeToolKey(requiredTool);
-    return toolsSet.has(key);
-  };
+  const hasTool = (requiredTool: string) => toolsSet.has(normalizeToolKey(requiredTool));
 
   return { connected, last, history, hasTool };
 }
