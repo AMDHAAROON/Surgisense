@@ -11,6 +11,7 @@ import Inventory from "@/pages/Inventory";
 import { ThemeProvider } from "@/components/theme/use-theme";
 import { AppShell } from "@/components/app-shell";
 import { SurgiBot } from "@/components/surgibot";
+import AboutPage from "@/pages/aboutpage";
 
 function Router() {
   return (
@@ -31,6 +32,7 @@ function App() {
         <ThemeProvider>
           <AppShell>
             <Router />
+            
           </AppShell>
           <Toaster />
           {/* SurgiBot at root level — floats above everything, always visible */}

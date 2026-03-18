@@ -6,6 +6,8 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
 import { useTheme } from "@/components/theme/use-theme";
 
+
+
 function NavLink({ href, icon: Icon, label }: { href: string; icon: any; label: string }) {
   const [loc] = useLocation();
   const active = loc === href;
@@ -50,9 +52,9 @@ export function AppShell({ children }: PropsWithChildren) {
 
   return (
     <div className="flex flex-col min-h-screen app-surface">
-      <header className="sticky top-6 z-50 w-full max-w-3xl mx-auto px-4 ">
-        <div className="glass rounded-full px-6 h-16 flex items-center justify-between shadow-2xl shadow-primary/5">
-          <div className="flex items-center gap-8  mr-4">
+      <header className="sticky top-6 z-50 w-full max-w-4xl mx-auto px-4  ">
+        <div className="glass rounded-full px-6 h-16 flex items-center justify-between shadow-2xl shadow-primary/5 ">
+          <div className="flex items-center gap-8  mr-4 ">
             <Link href="/" className="flex items-center gap-2 font-black text-2xl tracking-tighter hover:opacity-80 transition-opacity">
               <div className="bg-primary p-0.5 sm:p-1.5 rounded-lg shadow-lg shadow-primary/20 animate-pulse">
                 <Activity className="h-5 sm:h-6 w-5 sm:w-6 text-white" />
@@ -61,11 +63,11 @@ export function AppShell({ children }: PropsWithChildren) {
                 Surgisense
               </span>
             </Link>
-            <nav className="hidden md:flex items-center gap-2 p-1 bg-muted/30 rounded-full border border-border/50">
+            <nav className="hidden lg:flex items-center gap-2 p-1 bg-muted/30 rounded-full border border-border/50">
               <NavLink href="/" icon={Home} label="Home" />
               <NavLink href="/test" icon={FlaskConical} label="Test" />
               <NavLink href="/inventory" icon={Package} label="Tools" />
-              <NavLink href="/about" icon={Info} label="About" />
+              <NavLink href="/About" icon={Info} label="About" />
             </nav>
           </div>
           <div className="flex items-center gap-1 justify-between ml-4 ">
@@ -81,7 +83,7 @@ export function AppShell({ children }: PropsWithChildren) {
                 <Button 
                   variant="ghost" 
                   size="icon" 
-                  className="md:hidden rounded-full h-10 w-10 hover:bg-muted/50 pr-5  "
+                  className="lg:hidden rounded-full h-10 w-10 hover:bg-muted/50 pr-5  "
                 >
                   <Menu className="h-9 w-9 ml-5 " />
                 </Button>
@@ -103,7 +105,7 @@ export function AppShell({ children }: PropsWithChildren) {
               </SheetContent>
             </Sheet>
             <Link href="/test">
-              <Button size="sm" className="hidden sm:flex rounded-full border-emerald-400 px-6 font-bold">
+              <Button size="sm" className="hidden lg:flex rounded-full border-emerald-400 px-6 font-bold">
                 Get Started
               </Button>
              

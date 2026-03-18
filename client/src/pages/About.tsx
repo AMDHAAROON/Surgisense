@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState,useEffect,useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -8,7 +8,38 @@ import { Badge } from "@/components/ui/badge";
 import { useCreateContactMessage } from "@/hooks/use-contact";
 import { useToast } from "@/hooks/use-toast";
 import { Mail, Send, User, AtSign, Github, Linkedin, Twitter } from "lucide-react";
+import Teamcard from "@/components/team";
 
+function useInView(threshold = 0.15) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [inView, setInView] = useState(false);
+  useEffect(() => {
+    const obs = new IntersectionObserver(
+      ([e]) => { if (e.isIntersecting) setInView(true); },
+      { threshold }
+    );
+    if (ref.current) obs.observe(ref.current);
+    return () => obs.disconnect();
+  }, []);
+  return [ref, inView] as const;
+}
+
+function StatCounter({ target, suffix = "", duration = 2000 }: { target: number; suffix?: string; duration?: number }) {
+  const [count, setCount] = useState(0);
+  const [ref, inView] = useInView();
+  useEffect(() => {
+    if (!inView) return;
+    let start = 0;
+    const step = target / (duration / 16);
+    const timer = setInterval(() => {
+      start += step;
+      if (start >= target) { setCount(target); clearInterval(timer); }
+      else setCount(Math.floor(start));
+    }, 16);
+    return () => clearInterval(timer);
+  }, [inView, target, duration]);
+  return <span ref={ref}>{count.toLocaleString()}{suffix}</span>;
+}
 export default function About() {
   const devs = [
     { name: "saarathy", role: "", focus: "", initials: "SS" },
@@ -16,6 +47,8 @@ export default function About() {
     { name: "Subash", role: "", focus: "", initials: "SB" },
     { name: "Haaroon", role: "", focus: "", initials: "MH" },
   ];
+
+
 
   const { toast } = useToast();
   const create = useCreateContactMessage();
@@ -33,14 +66,15 @@ export default function About() {
   };
 
   return (
+   
     <div className="max-w-5xl mx-auto space-y-16 py-8">
-      <section className="text-center space-y-4">
+      {/* <section className="text-center space-y-4">
         <h1 className="text-4xl font-bold tracking-tight">The Team Behind Surgisense</h1>
         <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
           We're a dedicated group of engineers and designers focused on making surgical training safer and more data-driven.
         </p>
       </section>
-
+      
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6 cursor-pointer">
         {devs.map((dev) => (
           <Card key={dev.name} className="border-none shadow-sm hover:shadow-md transition-all text-center">
@@ -62,8 +96,30 @@ export default function About() {
             </CardContent>
           </Card>
         ))}
-      </div>
-
+      </div> */}
+       {/* TEAM card */}
+                <Teamcard />
+       {/* STATS */}
+          <section className="mb-24">
+            
+              <div className="grid grid-cols-4 gap-4">
+                {[
+                  { label: "Tools in Library", value: 50, suffix: "+", color: "var(--accent)" },
+                  { label: "Hospitals Worldwide", value: 0, suffix: "+", color: "var(--accent2)" },
+                  { label: "Scans Performed", value: 10, suffix: "+", color: "var(--accent3)" },
+                  { label: "Detection Accuracy", value: 95, suffix: ".2%", color: "#f59e0b" },
+                ].map((s, i) => (
+                  <div key={i} className="rounded-2xl p-6 text-center" style={{ background: "rgba(13,21,48,0.9)", border: "1px solid rgba(0,212,255,0.1)" }}>
+                    <div className="text-4xl font-black mb-1" style={{ color: s.color, fontFamily: "'Courier New',monospace", textShadow: `0 0 20px ${s.color}` }}>
+                      <StatCounter target={s.value} suffix={s.suffix} />
+                    </div>
+                    <div className="text-xs uppercase tracking-widest" style={{ color: "var(--muted)" }}>{s.label}</div>
+                  </div>
+                ))}
+              </div>
+            
+          </section>
+         
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-12 pt-8">
         <div className="space-y-6">
           <h2 className="text-3xl font-bold">Get in Touch</h2>
