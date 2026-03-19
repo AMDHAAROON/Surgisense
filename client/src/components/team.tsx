@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from "react";
+import { Github, Linkedin } from "lucide-react";
 
 const TEAM = [
   {
@@ -8,6 +9,8 @@ const TEAM = [
     initials: "ST",
     bio: "Architecting scalable backend systems and seamless frontend experiences for SurgiScan's core platform.",
     color: "#00d4ff",
+    github: "https://github.com/satagopan",
+    linkedin: "https://linkedin.com/in/satagopan",
   },
   {
     name: "Subash Chandra Bose",
@@ -16,6 +19,8 @@ const TEAM = [
     initials: "SCB",
     bio: "Building and fine-tuning SurgiNet models for surgical tool detection with near-perfect accuracy.",
     color: "#7c3aed",
+    github: "https://github.com/subash",
+    linkedin: "https://linkedin.com/in/subash",
   },
   {
     name: "Haaroon",
@@ -24,6 +29,8 @@ const TEAM = [
     initials: "MH",
     bio: "Pioneering real-time inference pipelines that power sub-3s surgical instrument recognition.",
     color: "#06ffa5",
+    github: "https://github.com/AMDHAAROON",
+    linkedin: "https://linkedin.com/in/haaroon",
   },
   {
     name: "Vishal",
@@ -32,6 +39,8 @@ const TEAM = [
     initials: "VS",
     bio: "Crafting intuitive, high-performance interfaces that bring AI insights to surgeons in the OR.",
     color: "#f59e0b",
+    github: "https://github.com/vishal",
+    linkedin: "https://linkedin.com/in/vishal",
   },
 ];
 
@@ -84,8 +93,7 @@ function TeamCard({ member, index }: { member: typeof TEAM[0]; index: number }) 
         }}
       >
         {/* Top row: avatar + name */}
-        <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 16 }}>
-          {/* Avatar circle with initials */}
+        <div className="team-card-top">
           <div
             style={{
               width: 64,
@@ -109,7 +117,7 @@ function TeamCard({ member, index }: { member: typeof TEAM[0]; index: number }) 
             {member.initials}
           </div>
 
-          <div>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 900, fontSize: 15, color: "white", marginBottom: 3, fontFamily: "'Courier New', monospace" }}>
               {member.name}
             </div>
@@ -119,6 +127,74 @@ function TeamCard({ member, index }: { member: typeof TEAM[0]; index: number }) 
             <div style={{ fontSize: 11, color: "#64748b", letterSpacing: "0.05em", textTransform: "uppercase" }}>
               {member.dept}
             </div>
+          </div>
+
+          {/* Social icons */}
+          <div className="team-social" style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+            <a
+              href={member.github}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 30,
+                height: 30,
+                borderRadius: 8,
+                background: "rgba(255,255,255,0.05)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                color: "#94a3b8",
+                transition: "all 0.2s ease",
+                textDecoration: "none",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLAnchorElement).style.color = "#ffffff";
+                (e.currentTarget as HTMLAnchorElement).style.background = "rgba(255,255,255,0.12)";
+                (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(255,255,255,0.2)";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLAnchorElement).style.color = "#94a3b8";
+                (e.currentTarget as HTMLAnchorElement).style.background = "rgba(255,255,255,0.05)";
+                (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(255,255,255,0.08)";
+              }}
+              aria-label={`${member.name} GitHub`}
+            >
+              <Github size={14} />
+            </a>
+            <a
+              href={member.linkedin}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 30,
+                height: 30,
+                borderRadius: 8,
+                background: "rgba(255,255,255,0.05)",
+                border: "1px solid rgba(255,255,255,0.08)",
+                color: "#94a3b8",
+                transition: "all 0.2s ease",
+                textDecoration: "none",
+              }}
+              onMouseEnter={(e) => {
+                (e.currentTarget as HTMLAnchorElement).style.color = "#0a66c2";
+                (e.currentTarget as HTMLAnchorElement).style.background = "rgba(10,102,194,0.15)";
+                (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(10,102,194,0.3)";
+              }}
+              onMouseLeave={(e) => {
+                (e.currentTarget as HTMLAnchorElement).style.color = "#94a3b8";
+                (e.currentTarget as HTMLAnchorElement).style.background = "rgba(255,255,255,0.05)";
+                (e.currentTarget as HTMLAnchorElement).style.borderColor = "rgba(255,255,255,0.08)";
+              }}
+              aria-label={`${member.name} LinkedIn`}
+            >
+              <Linkedin size={14} />
+            </a>
           </div>
         </div>
 
@@ -171,6 +247,13 @@ export default function TeamSection() {
       <style>{`
         @keyframes float-slow { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-8px)} }
         @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0.2} }
+        .team-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; max-width: 900px; margin: 0 auto; }
+        @media (max-width: 600px) { .team-grid { grid-template-columns: 1fr; } }
+        .team-card-top { display: flex; align-items: center; gap: 16px; margin-bottom: 16px; }
+        @media (max-width: 400px) {
+          .team-card-top { flex-wrap: wrap; }
+          .team-social { margin-left: auto; }
+        }
       `}</style>
 
       <section style={{ position: "relative", padding: "80px 0" }}>
@@ -189,7 +272,7 @@ export default function TeamSection() {
 
             <h2 style={{
               fontSize: 40, fontWeight: 900, margin: "0 0 12px",
-               color: "#e2e8f0",
+              color: "#e2e8f0",
               letterSpacing: "0.05em",
             }}>
               Meet Our{" "}
@@ -205,22 +288,11 @@ export default function TeamSection() {
         </FadeIn>
 
         {/* Cards grid */}
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 20, maxWidth: 900, margin: "0 auto" }}>
+        <div className="team-grid">
           {TEAM.map((member, i) => (
             <TeamCard key={member.name} member={member} index={i} />
           ))}
         </div>
-
-        {/* Bottom tagline */}
-        {/* <FadeIn delay={600} direction="up">
-          <div style={{ textAlign: "center", marginTop: 48, display: "flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#06ffa5", boxShadow: "0 0 8px #06ffa5", display: "inline-block", animation: "blink 2s infinite" }} />
-            <span style={{ fontSize: 12, color: "#64748b", letterSpacing: "0.1em", textTransform: "uppercase", fontFamily: "'Courier New', monospace" }}>
-              Chennai · India · Est. 2019
-            </span>
-            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#06ffa5", boxShadow: "0 0 8px #06ffa5", display: "inline-block", animation: "blink 2s infinite 1s" }} />
-          </div>
-        </FadeIn> */}
 
       </section>
     </>

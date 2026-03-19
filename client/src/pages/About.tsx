@@ -100,25 +100,23 @@ export default function About() {
        {/* TEAM card */}
                 <Teamcard />
        {/* STATS */}
-          <section className="mb-24">
-            
-              <div className="grid grid-cols-4 gap-4">
-                {[
-                  { label: "Tools in Library", value: 50, suffix: "+", color: "var(--accent)" },
-                  { label: "Hospitals Worldwide", value: 0, suffix: "+", color: "var(--accent2)" },
-                  { label: "Scans Performed", value: 10, suffix: "+", color: "var(--accent3)" },
-                  { label: "Detection Accuracy", value: 95, suffix: ".2%", color: "#f59e0b" },
-                ].map((s, i) => (
-                  <div key={i} className="rounded-2xl p-6 text-center" style={{ background: "rgba(13,21,48,0.9)", border: "1px solid rgba(0,212,255,0.1)" }}>
-                    <div className="text-4xl font-black mb-1" style={{ color: s.color, fontFamily: "'Courier New',monospace", textShadow: `0 0 20px ${s.color}` }}>
-                      <StatCounter target={s.value} suffix={s.suffix} />
-                    </div>
-                    <div className="text-xs uppercase tracking-widest" style={{ color: "var(--muted)" }}>{s.label}</div>
-                  </div>
-                ))}
-              </div>
-            
-          </section>
+         <section className="mb-24">
+  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+    {[
+      { label: "Tools in Library", value: 50, suffix: "+", color: "var(--accent)" },
+      { label: "Hospitals Worldwide", value: 0, suffix: "+", color: "var(--accent2)" },
+      { label: "Scans Performed", value: 10, suffix: "+", color: "var(--accent3)" },
+      { label: "Detection Accuracy", value: 95, suffix: ".2%", color: "#f59e0b" },
+    ].map((s, i) => (
+      <div key={i} className="rounded-2xl p-4 sm:p-6 text-center" style={{ background: "rgba(13,21,48,0.9)", border: "1px solid rgba(0,212,255,0.1)" }}>
+        <div className="text-2xl sm:text-4xl font-black mb-1" style={{ color: s.color, fontFamily: "'Courier New',monospace", textShadow: `0 0 20px ${s.color}` }}>
+          <StatCounter target={s.value} suffix={s.suffix} />
+        </div>
+        <div className="text-[10px] sm:text-xs uppercase tracking-widest leading-tight" style={{ color: "var(--muted)" }}>{s.label}</div>
+      </div>
+    ))}
+  </div>
+</section>
          
       <section className="grid grid-cols-1 lg:grid-cols-2 gap-12 pt-8">
         <div className="space-y-6">
