@@ -13,7 +13,7 @@ import { useToast } from "@/hooks/use-toast";
 export default function Test() {
   const { data: procedures = [] } = useProcedures();
   const [selectedProcId, setSelectedProcId] = useState<number | null>(null);
-  const { data: stages = [] }               = useProcedureStages(selectedProcId ?? 0);
+  const { data: stages = [] }               = useProcedureStages(selectedProcId);
   const { toast }                           = useToast();
 
   const [detectedTools,   setDetectedTools]   = useState<DetectedTool[]>([]);
