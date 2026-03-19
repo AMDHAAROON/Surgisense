@@ -5,7 +5,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { Filter, Radar, RotateCcw, Wifi, WifiOff, activity } from "lucide-react";
-import { normalizeToolKey, type ToolHistoryItem } from "@/hooks/use-tool-detection";
+
+// Local type and utility definitions (moved from use-tool-detection.ts)
+type ToolHistoryItem = { at: Date; tools: { name: string; confidence?: number }[] };
+
+function normalizeToolKey(name: string) {
+  return name.trim().toLowerCase().replace(/\s+/g, "_");
+}
 
 function ToolPill({ name, confidence, status }: { name: string; confidence?: number; status?: string }) {
   const conf = typeof confidence === "number" ? Math.max(0, Math.min(1, confidence)) : null;
