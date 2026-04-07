@@ -15,6 +15,7 @@ import {
   Package,
   ArrowRightLeft,
   Layers3,
+  ChevronDown,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -139,31 +140,73 @@ export default function Inventory() {
     type: "ok" | "err" | "warn" | "info";
   } | null>(null);
 
+  // ── Camera selector state ──────────────────────────────────────────────────
+  const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
+  const [selectedCamId, setSelectedCamId] = useState<string>("");
+  const [showCamMenu, setShowCamMenu] = useState(false);
+
   const setMsg = (msg: string, type: "ok" | "err" | "warn" | "info" = "info") =>
     setStatus({ msg, type });
 
-  // ── Camera ─────────────────────────────────────────────────────────────────
-  const startCamera = useCallback(async () => {
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const cameras = devices.filter((d) => d.kind === "videoinput");
-      const deviceId = cameras[1]?.deviceId;
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { deviceId: { exact: deviceId }, width: 640, height: 480 },
-      });
-      streamRef.current = stream;
-      setStreaming(true);
-      setMsg("Camera ready — position tray then capture.", "info");
-    } catch {
-      setMsg("Could not access camera.", "err");
-    }
+  // ── Enumerate cameras on mount ─────────────────────────────────────────────
+  useEffect(() => {
+    navigator.mediaDevices
+      .enumerateDevices()
+      .then((devices) => {
+        const cams = devices.filter((d) => d.kind === "videoinput");
+        setCameras(cams);
+        if (cams.length > 0) setSelectedCamId(cams[0].deviceId);
+      })
+      .catch(() => {});
   }, []);
+
+  // Re-enumerate after permission granted so labels become available
+  const refreshCameras = async () => {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const cams = devices.filter((d) => d.kind === "videoinput");
+    setCameras(cams);
+    return cams;
+  };
+
+  // ── Camera ─────────────────────────────────────────────────────────────────
+  const startCamera = useCallback(
+    async (deviceId?: string) => {
+      try {
+        const cams = await refreshCameras();
+        const id = deviceId ?? selectedCamId ?? cams[0]?.deviceId ?? "";
+        if (cams.length > 0 && !selectedCamId) setSelectedCamId(cams[0].deviceId);
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: id
+            ? { deviceId: { exact: id }, width: 640, height: 480 }
+            : { width: 640, height: 480 },
+        });
+        streamRef.current = stream;
+        setStreaming(true);
+        setMsg("Camera ready — position tray then capture.", "info");
+      } catch {
+        setMsg("Could not access camera.", "err");
+      }
+    },
+    [selectedCamId],
+  );
 
   const stopCamera = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
     streamRef.current = null;
     setStreaming(false);
   }, []);
+
+  // ── Switch camera while live ───────────────────────────────────────────────
+  const handleSwitchCamera = async (deviceId: string) => {
+    setSelectedCamId(deviceId);
+    setShowCamMenu(false);
+    if (streaming) {
+      streamRef.current?.getTracks().forEach((t) => t.stop());
+      streamRef.current = null;
+      setStreaming(false);
+      await startCamera(deviceId);
+    }
+  };
 
   useEffect(() => {
     if (streaming && videoRef.current && streamRef.current) {
@@ -212,12 +255,11 @@ export default function Inventory() {
     [stopCamera],
   );
 
-  // ── Scan — pre uses generic scan, post uses scan-post with hints ───────────
+  // ── Scan ───────────────────────────────────────────────────────────────────
   const scanImage = useCallback(async () => {
     if (!capturedImg) return;
     setScanning(true);
 
-    // POST phase — send pre tool names as priority hints to Gemini
     if (phase === "post") {
       setMsg(
         `Scanning with ${preToolsFromDB.length} pre-surgery tool hints…`,
@@ -243,7 +285,6 @@ export default function Inventory() {
       return;
     }
 
-    // PRE phase — generic scan, no hints needed
     setMsg("Scanning instruments…", "info");
     try {
       const res = await fetch("/api/inventory/scan", {
@@ -282,7 +323,7 @@ export default function Inventory() {
     }
   }, [capturedImg, tools]);
 
-  // ── Phase change — fetch latest pre from DB when switching to post ─────────
+  // ── Reset ──────────────────────────────────────────────────────────────────
   const reset = useCallback(() => {
     setCapturedImg(null);
     setTools([]);
@@ -292,6 +333,7 @@ export default function Inventory() {
     stopCamera();
   }, [stopCamera]);
 
+  // ── Phase change ───────────────────────────────────────────────────────────
   const handlePhaseChange = useCallback(
     async (p: "pre" | "post") => {
       reset();
@@ -355,6 +397,12 @@ export default function Inventory() {
     warn: "bg-amber-500/10 text-amber-400 border-amber-500/20",
     info: "bg-primary/10 text-primary border-primary/20",
   };
+
+  const selectedCamLabel =
+    cameras.find((c) => c.deviceId === selectedCamId)?.label ||
+    (cameras.length > 0
+      ? `Camera ${cameras.findIndex((c) => c.deviceId === selectedCamId) + 1}`
+      : "Camera");
 
   return (
     <div className="space-y-10">
@@ -465,6 +513,38 @@ export default function Inventory() {
 
               {/* Video / image area */}
               <div className="relative bg-black" style={{ aspectRatio: "4/3" }}>
+
+                {/* ── Live camera selector (top-right, only when streaming + multiple cams) ── */}
+                {streaming && cameras.length > 1 && (
+                  <div className="absolute top-3 right-3 z-20">
+                    <button
+                      onClick={() => setShowCamMenu((v) => !v)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-black/60 backdrop-blur-md border border-white/10 text-white/80 text-[11px] font-medium shadow-xl hover:bg-black/80 transition-colors"
+                    >
+                      <Camera className="h-3 w-3" />
+                      <span className="max-w-[100px] truncate">{selectedCamLabel}</span>
+                      <ChevronDown className="h-3 w-3 opacity-60" />
+                    </button>
+                    {showCamMenu && (
+                      <div className="absolute right-0 mt-1 w-52 rounded-xl bg-black/90 backdrop-blur-md border border-white/10 shadow-2xl overflow-hidden">
+                        {cameras.map((cam, i) => (
+                          <button
+                            key={cam.deviceId}
+                            onClick={() => handleSwitchCamera(cam.deviceId)}
+                            className={cn(
+                              "w-full text-left px-4 py-2.5 text-[12px] text-white hover:bg-white/10 transition-colors truncate",
+                              cam.deviceId === selectedCamId &&
+                                "bg-primary/20 text-primary font-semibold",
+                            )}
+                          >
+                            {cam.label || `Camera ${i + 1}`}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {streaming && (
                   <video
                     ref={videoRef}
@@ -498,11 +578,31 @@ export default function Inventory() {
                 )}
 
                 {!streaming && !capturedImg && (
-                  <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground gap-3">
+                  <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground gap-4">
                     <div className="p-4 rounded-full bg-muted/20">
                       <Camera className="h-10 w-10 opacity-40" />
                     </div>
                     <p className="text-sm">Use webcam or upload a photo below</p>
+
+                    {/* ── Offline camera selector (only when multiple cams available) ── */}
+                    {cameras.length > 1 && (
+                      <div className="flex flex-col items-center gap-2 w-48">
+                        <p className="text-xs opacity-60 uppercase tracking-wider font-semibold">
+                          Select Camera
+                        </p>
+                        <select
+                          value={selectedCamId}
+                          onChange={(e) => setSelectedCamId(e.target.value)}
+                          className="w-full rounded-lg border border-white/20 bg-black/40 text-white text-xs px-3 py-2 backdrop-blur-md focus:outline-none focus:border-primary"
+                        >
+                          {cameras.map((cam, i) => (
+                            <option key={cam.deviceId} value={cam.deviceId}>
+                              {cam.label || `Camera ${i + 1}`}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -522,7 +622,7 @@ export default function Inventory() {
               <div className="p-5 bg-muted/5 border-t border-white/10 flex flex-wrap gap-3">
                 {!streaming && !capturedImg && (
                   <Button
-                    onClick={startCamera}
+                    onClick={() => startCamera()}
                     className="gap-2 rounded-full font-bold"
                   >
                     <Camera className="h-4 w-4" /> Start Webcam
