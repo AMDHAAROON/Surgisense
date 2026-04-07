@@ -194,13 +194,33 @@ def _gemini_inventory(image_b64: str) -> list:
         }],
         "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.1}
     }).encode("utf-8")
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+
+    INVENTORY_MODELS = ["gemini-2.5-flash","gemini-2.0-flash", "gemini-2.0-flash-lite"]
+    raw = None
+    for model_name in INVENTORY_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        try:
+            req = urllib.request.Request(url, data=payload,
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read().decode())
+            raw = result["candidates"][0]["content"]["parts"][0]["text"].strip()
+            print(f"[Gemini Inventory] Using model: {model_name}")
+            break
+        except urllib.error.HTTPError as e:
+            try: err = json.loads(e.read().decode()).get("error", {}).get("message", str(e))
+            except: err = str(e)
+            print(f"[Gemini Inventory] {model_name} failed: {err[:100]}")
+            continue
+        except Exception as e:
+            print(f"[Gemini Inventory] {model_name} error: {e}")
+            continue
+
+    if raw is None:
+        print("[Gemini Inventory] All models failed")
+        return []
+
     try:
-        req = urllib.request.Request(url, data=payload,
-                                     headers={"Content-Type": "application/json"}, method="POST")
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read().decode())
-        raw = result["candidates"][0]["content"]["parts"][0]["text"].strip()
         if "```" in raw:
             raw = raw.split("```")[1]
             if raw.startswith("json"): raw = raw[4:]
@@ -235,15 +255,9 @@ def _gemini_inventory(image_b64: str) -> list:
                           "box": {"x1": x1, "y1": y1, "x2": x2, "y2": y2}})
         valid = _nms_deduplicate(valid)
         return valid
-    except urllib.error.HTTPError as e:
-        try: err = json.loads(e.read().decode()).get("error", {}).get("message", str(e))
-        except: err = str(e)
-        print(f"[Gemini Inventory] HTTP error: {err[:200]}")
-        return []
     except Exception as e:
         print(f"[Gemini Inventory] Error: {e}")
         return []
-
 
 def _groq_inventory_fallback(image_b64: str) -> list:
     PROMPT = f"""You are a surgical instrument inventory system.
@@ -648,7 +662,163 @@ async def inventory_reconcile(body: dict = Body(...)):
                       else f"{len(missing)} tool(s) missing: {missing_summary}",
     })
 
+@app.get("/api/inventory/session/{session_id}")
+def get_inventory_session(session_id: int):
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, session_type, tools_json, created_at "
+            "FROM inventory_sessions WHERE id=%s",
+            (session_id,)
+        )
+        row = cur.fetchone()
+    if not row:
+        return JSONResponse({"error": "Session not found"}, status_code=404)
+    return JSONResponse({
+        "id": row["id"],
+        "type": row["session_type"],
+        "tools": row["tools_json"],
+        "createdAt": str(row["created_at"])
+    })
 
+@app.get("/api/inventory/latest/{session_type}")
+def inventory_latest(session_type: str):
+    if session_type not in ("pre", "post"):
+        return JSONResponse({"error": "type must be 'pre' or 'post'"}, status_code=400)
+    with get_db() as conn:
+        cur = conn.cursor()
+        cur.execute(
+            "SELECT id, session_type, tools_json, created_at "
+            "FROM inventory_sessions WHERE session_type=%s ORDER BY created_at DESC LIMIT 1",
+            (session_type,)
+        )
+        row = cur.fetchone()
+    if not row:
+        return JSONResponse({"error": "No inventory found"}, status_code=404)
+    return JSONResponse({
+        "id": row["id"],
+        "type": row["session_type"],
+        "tools": row["tools_json"],
+        "createdAt": str(row["created_at"])
+    })
+    
+def _gemini_inventory_post(image_b64: str, pre_tool_names: list[str]) -> list:
+    priority_hint = ", ".join(pre_tool_names) if pre_tool_names else ", ".join(SURGICAL_TOOLS)
+
+    POST_PROMPT = f"""You are a surgical instrument detection system analyzing a POST-surgery tray.
+
+PRIORITY — search specifically for these instruments first (they were present before surgery):
+{priority_hint}
+
+Also detect any other surgical instruments visible.
+Known instruments: {", ".join(SURGICAL_TOOLS)}.
+
+CRITICAL DISTINCTIONS — read before identifying scissors:
+- iris_scissors: SMALL, short blades (~2-3cm), delicate pointed tips, fine lightweight handles — used for eye/microsurgery
+- operating_scissors: LARGE, long blades (~5-7cm), heavier build, blunt or curved tips, thick handles — general surgical use
+When you see scissors, measure the blade length relative to the handle. Short blades = iris_scissors. Long blades = operating_scissors. Do NOT guess.
+
+Return ONLY a valid JSON array. No markdown, no explanation, no extra text.
+Each item must have exactly these fields:
+- "name": instrument name from the known list
+- "confidence": number between 0 and 1
+- "x1": left edge (0.0 to 1.0)
+- "y1": top edge (0.0 to 1.0)
+- "x2": right edge (0.0 to 1.0)
+- "y2": bottom edge (0.0 to 1.0)
+
+Example output:
+[{{"name":"scalpel","confidence":0.9,"x1":0.10,"y1":0.20,"x2":0.25,"y2":0.80}}]
+
+Return [] if no instruments visible."""
+
+    payload = json.dumps({
+        "contents": [{
+            "parts": [
+                {"inline_data": {"mime_type": "image/jpeg", "data": image_b64}},
+                {"text": POST_PROMPT}
+            ]
+        }],
+        "generationConfig": {"maxOutputTokens": 4096, "temperature": 0.1}
+    }).encode("utf-8")
+
+    INVENTORY_MODELS = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.0-flash-lite"]
+    raw = None
+    for model_name in INVENTORY_MODELS:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
+        try:
+            req = urllib.request.Request(url, data=payload,
+                                         headers={"Content-Type": "application/json"}, method="POST")
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                result = json.loads(resp.read().decode())
+            raw = result["candidates"][0]["content"]["parts"][0]["text"].strip()
+            print(f"[Gemini Post-Scan] Using model: {model_name}")
+            break
+        except urllib.error.HTTPError as e:
+            try: err = json.loads(e.read().decode()).get("error", {}).get("message", str(e))
+            except: err = str(e)
+            print(f"[Gemini Post-Scan] {model_name} failed: {err[:100]}")
+            continue
+        except Exception as e:
+            print(f"[Gemini Post-Scan] {model_name} error: {e}")
+            continue
+
+    if raw is None:
+        print("[Gemini Post-Scan] All models failed")
+        return []
+
+    try:
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"): raw = raw[4:]
+        raw = raw.strip()
+        items = json.loads(raw)
+        if not isinstance(items, list):
+            return []
+        valid = []
+        for t in items:
+            if "box_2d" in t:
+                coords = t["box_2d"]
+                y1 = max(0.0, coords[0] / 1000); x1 = max(0.0, coords[1] / 1000)
+                y2 = min(1.0, coords[2] / 1000); x2 = min(1.0, coords[3] / 1000)
+                name = t.get("label", "unknown").lower().replace(" ", "_")
+                conf = float(t.get("confidence", 0.85))
+            elif "x1" in t:
+                x1 = max(0.0, float(t.get("x1", 0))); y1 = max(0.0, float(t.get("y1", 0)))
+                x2 = min(1.0, float(t.get("x2", 1))); y2 = min(1.0, float(t.get("y2", 1)))
+                name = t.get("name", "unknown").lower().replace(" ", "_")
+                conf = float(t.get("confidence", 0.7))
+            elif "box" in t and isinstance(t["box"], dict):
+                box  = t["box"]
+                x1 = max(0.0, float(box.get("x1", 0))); y1 = max(0.0, float(box.get("y1", 0)))
+                x2 = min(1.0, float(box.get("x2", 1))); y2 = min(1.0, float(box.get("y2", 1)))
+                name = t.get("name", "unknown").lower().replace(" ", "_")
+                conf = float(t.get("confidence", 0.7))
+            else:
+                continue
+            if x2 <= x1 or y2 <= y1:
+                continue
+            valid.append({"name": name, "confidence": conf,
+                          "box": {"x1": x1, "y1": y1, "x2": x2, "y2": y2}})
+        valid = _nms_deduplicate(valid)
+        return valid
+    except Exception as e:
+        print(f"[Gemini Post-Scan] Error: {e}")
+        return []
+
+
+@app.post("/api/inventory/scan-post")
+async def inventory_scan_post(body: dict = Body(...)):
+    image_b64 = body.get("image", "")
+    pre_tools = body.get("preTools", [])
+    if not image_b64:
+        return JSONResponse({"error": "No image provided"}, status_code=400)
+    if "," in image_b64:
+        image_b64 = image_b64.split(",", 1)[1]
+    pre_tool_names = list(dict.fromkeys(t["name"] for t in pre_tools))
+    print(f"[Post-Scan] Priority tools: {pre_tool_names}")
+    tools = _gemini_inventory_post(image_b64, pre_tool_names)
+    return JSONResponse({"tools": tools, "count": len(tools)})
 # ── Health ────────────────────────────────────────────────────────────────────
 @app.get("/api/health")
 def health():
