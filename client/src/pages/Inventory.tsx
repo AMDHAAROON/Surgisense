@@ -131,6 +131,7 @@ export default function Inventory() {
   const [phase, setPhase] = useState<"idle" | "pre" | "post">("idle");
   const [preSaved, setPreSaved] = useState(false);
   const [preSessionId, setPreSessionId] = useState<number | null>(null);
+  const [preToolsFromDB, setPreToolsFromDB] = useState<InventoryTool[]>([]);
   const [reconcile, setReconcile] = useState<ReconcileResult | null>(null);
   const [imgDims, setImgDims] = useState({ w: 640, h: 480 });
   const [status, setStatus] = useState<{
@@ -146,7 +147,6 @@ export default function Inventory() {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const cameras = devices.filter((d) => d.kind === "videoinput");
-      // cameras[0] = built-in laptop webcam, cameras[1] = external
       const deviceId = cameras[1]?.deviceId;
       const stream = await navigator.mediaDevices.getUserMedia({
         video: { deviceId: { exact: deviceId }, width: 640, height: 480 },
@@ -165,7 +165,6 @@ export default function Inventory() {
     setStreaming(false);
   }, []);
 
-  // Attach stream to video element once it mounts after setStreaming(true)
   useEffect(() => {
     if (streaming && videoRef.current && streamRef.current) {
       videoRef.current.srcObject = streamRef.current;
@@ -205,10 +204,7 @@ export default function Inventory() {
           setImgDims({ w: img.naturalWidth, h: img.naturalHeight });
         img.src = url;
         stopCamera();
-        setMsg(
-          "Image uploaded. Click Scan Tools to detect instruments.",
-          "info",
-        );
+        setMsg("Image uploaded. Click Scan Tools to detect instruments.", "info");
       };
       reader.readAsDataURL(file);
       e.target.value = "";
@@ -216,11 +212,39 @@ export default function Inventory() {
     [stopCamera],
   );
 
-  // ── Groq scan ──────────────────────────────────────────────────────────────
+  // ── Scan — pre uses generic scan, post uses scan-post with hints ───────────
   const scanImage = useCallback(async () => {
     if (!capturedImg) return;
     setScanning(true);
-    setMsg("Sending to Groq Vision… this may take 5–10 seconds.", "info");
+
+    // POST phase — send pre tool names as priority hints to Gemini
+    if (phase === "post") {
+      setMsg(
+        `Scanning with ${preToolsFromDB.length} pre-surgery tool hints…`,
+        "info",
+      );
+      try {
+        const res = await fetch("/api/inventory/scan-post", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ image: capturedImg, preTools: preToolsFromDB }),
+        });
+        const data = await res.json();
+        setTools(data.tools || []);
+        setMsg(
+          `Detected ${data.count} tool(s). Click Reconcile Now to compare.`,
+          "ok",
+        );
+      } catch {
+        setMsg("Scan failed. Check backend is running.", "err");
+      } finally {
+        setScanning(false);
+      }
+      return;
+    }
+
+    // PRE phase — generic scan, no hints needed
+    setMsg("Scanning instruments…", "info");
     try {
       const res = await fetch("/api/inventory/scan", {
         method: "POST",
@@ -235,7 +259,7 @@ export default function Inventory() {
     } finally {
       setScanning(false);
     }
-  }, [capturedImg]);
+  }, [capturedImg, phase, preToolsFromDB]);
 
   // ── Save pre ───────────────────────────────────────────────────────────────
   const savePreSurgery = useCallback(async () => {
@@ -250,16 +274,52 @@ export default function Inventory() {
       const data = await res.json();
       setPreSessionId(data.id);
       setPreSaved(true);
-      setMsg(
-        `Pre-surgery inventory saved — ${tools.length} tool(s) recorded.`,
-        "ok",
-      );
+      setMsg(`Pre-surgery inventory saved — ${tools.length} tool(s) recorded.`, "ok");
     } catch {
       setMsg("Failed to save inventory.", "err");
     } finally {
       setSaving(false);
     }
   }, [capturedImg, tools]);
+
+  // ── Phase change — fetch latest pre from DB when switching to post ─────────
+  const reset = useCallback(() => {
+    setCapturedImg(null);
+    setTools([]);
+    setReconcile(null);
+    setStatus(null);
+    setStreaming(false);
+    stopCamera();
+  }, [stopCamera]);
+
+  const handlePhaseChange = useCallback(
+    async (p: "pre" | "post") => {
+      reset();
+      setPhase(p);
+      if (p === "post") {
+        try {
+          const res = await fetch("/api/inventory/latest/pre");
+          if (res.ok) {
+            const data = await res.json();
+            setPreSessionId(data.id);
+            setPreToolsFromDB(data.tools || []);
+            setMsg(
+              `Loaded pre-surgery inventory — ${data.tools.length} tool(s) on record.`,
+              "ok",
+            );
+          } else {
+            setMsg(
+              "No pre-surgery inventory found. Please complete Before Surgery first.",
+              "warn",
+            );
+          }
+        } catch {
+          setMsg("Could not load pre-surgery inventory.", "err");
+        }
+      }
+    },
+    [reset],
+  );
 
   // ── Reconcile ──────────────────────────────────────────────────────────────
   const reconcilePost = useCallback(async () => {
@@ -286,14 +346,6 @@ export default function Inventory() {
       setSaving(false);
     }
   }, [capturedImg, tools, preSessionId]);
-
-  const reset = () => {
-    setCapturedImg(null);
-    setTools([]);
-    setReconcile(null);
-    setStatus(null);
-    setStreaming(false);
-  };
 
   const missingNames = reconcile?.missing.map((m) => m.name) ?? [];
 
@@ -323,34 +375,40 @@ export default function Inventory() {
       </section>
 
       {/* ── Phase tabs ── */}
-     <div className="flex justify-center px-4">
-  <div className="flex w-full max-w-sm sm:w-auto gap-2 p-1 bg-muted/30 rounded-full border border-border/50">
-    {(
-      [
-        ["pre", "Before Surgery", Package],
-        ["post", "After Surgery", ArrowRightLeft],
-      ] as const
-    ).map(([p, label, Icon]) => (
-      <button
-        key={p}
-        onClick={() => { setPhase(p); reset(); }}
-        className={cn(
-          "relative flex flex-1 sm:flex-none items-center justify-center gap-2 px-3 sm:px-6 py-2.5 text-xs sm:text-sm font-semibold transition-all rounded-full overflow-hidden",
-          phase === p ? "text-primary-foreground" : "text-muted-foreground hover:text-foreground"
-        )}
-      >
-        {phase === p && (
-          <div className={cn(
-            "absolute inset-0 shadow-lg z-0",
-            p === "pre" ? "bg-primary shadow-primary/30" : "bg-primary shadow-violet-600/30"
-          )} />
-        )}
-        <Icon className="h-4 w-4 relative z-10 shrink-0" />
-        <span className="relative z-10">{label}</span>
-      </button>
-    ))}
-  </div>
-</div>
+      <div className="flex justify-center px-4">
+        <div className="flex w-full max-w-sm sm:w-auto gap-2 p-1 bg-muted/30 rounded-full border border-border/50">
+          {(
+            [
+              ["pre", "Before Surgery", Package],
+              ["post", "After Surgery", ArrowRightLeft],
+            ] as const
+          ).map(([p, label, Icon]) => (
+            <button
+              key={p}
+              onClick={() => handlePhaseChange(p)}
+              className={cn(
+                "relative flex flex-1 sm:flex-none items-center justify-center gap-2 px-3 sm:px-6 py-2.5 text-xs sm:text-sm font-semibold transition-all rounded-full overflow-hidden",
+                phase === p
+                  ? "text-primary-foreground"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {phase === p && (
+                <div
+                  className={cn(
+                    "absolute inset-0 shadow-lg z-0",
+                    p === "pre"
+                      ? "bg-primary shadow-primary/30"
+                      : "bg-primary shadow-violet-600/30",
+                  )}
+                />
+              )}
+              <Icon className="h-4 w-4 relative z-10 shrink-0" />
+              <span className="relative z-10">{label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
 
       {/* ── Idle state ── */}
       {phase === "idle" && (
@@ -368,6 +426,15 @@ export default function Inventory() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 items-start">
           {/* Left — camera / image panel */}
           <div className="lg:col-span-8 space-y-4">
+            {/* Pre tools loaded from DB banner */}
+            {phase === "post" && preToolsFromDB.length > 0 && !reconcile && (
+              <div className="flex items-center gap-3 px-5 py-3 rounded-2xl border bg-primary/10 text-primary border-primary/20 text-sm font-medium">
+                <Package className="h-4 w-4 shrink-0" />
+                Pre-surgery record: {preToolsFromDB.length} tool(s) loaded —
+                Gemini will search for these first.
+              </div>
+            )}
+
             <div className="glass-card overflow-hidden rounded-2xl">
               {/* Card header */}
               <div className="p-5 border-b border-white/10 flex items-center justify-between bg-muted/10">
@@ -382,9 +449,7 @@ export default function Inventory() {
                         : "Post-Surgery Capture"}
                     </h2>
                     <p className="text-xs text-muted-foreground uppercase tracking-widest font-bold">
-                      {phase === "pre"
-                        ? "Build Inventory"
-                        : "Verify & Reconcile"}
+                      {phase === "pre" ? "Build Inventory" : "Verify & Reconcile"}
                     </p>
                   </div>
                 </div>
@@ -400,7 +465,6 @@ export default function Inventory() {
 
               {/* Video / image area */}
               <div className="relative bg-black" style={{ aspectRatio: "4/3" }}>
-                {/* Live webcam */}
                 {streaming && (
                   <video
                     ref={videoRef}
@@ -411,7 +475,6 @@ export default function Inventory() {
                   />
                 )}
 
-                {/* Captured image + bounding boxes */}
                 {!streaming && capturedImg && (
                   <div className="relative w-full h-full">
                     <img
@@ -434,24 +497,22 @@ export default function Inventory() {
                   </div>
                 )}
 
-                {/* Empty placeholder */}
                 {!streaming && !capturedImg && (
                   <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground gap-3">
                     <div className="p-4 rounded-full bg-muted/20">
                       <Camera className="h-10 w-10 opacity-40" />
                     </div>
-                    <p className="text-sm">
-                      Use webcam or upload a photo below
-                    </p>
+                    <p className="text-sm">Use webcam or upload a photo below</p>
                   </div>
                 )}
 
-                {/* Scanning overlay */}
                 {scanning && (
                   <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex flex-col items-center justify-center gap-4">
                     <div className="h-10 w-10 rounded-full border-4 border-primary/30 border-t-primary animate-spin" />
                     <p className="text-white text-sm font-medium">
-                      Analysing with Groq Vision…
+                      {phase === "post"
+                        ? `Scanning with ${preToolsFromDB.length} pre-surgery hints…`
+                        : "Analysing with Gemini Vision…"}
                     </p>
                   </div>
                 )}
@@ -459,7 +520,6 @@ export default function Inventory() {
 
               {/* Action buttons */}
               <div className="p-5 bg-muted/5 border-t border-white/10 flex flex-wrap gap-3">
-                {/* Webcam flow */}
                 {!streaming && !capturedImg && (
                   <Button
                     onClick={startCamera}
@@ -477,7 +537,6 @@ export default function Inventory() {
                   </Button>
                 )}
 
-                {/* Upload photo */}
                 {!streaming && (
                   <>
                     <Button
@@ -497,17 +556,16 @@ export default function Inventory() {
                   </>
                 )}
 
-                {/* Scan */}
                 {capturedImg && !scanning && tools.length === 0 && (
                   <Button
                     onClick={scanImage}
-                    className="gap-2 rounded-full font-bold"
+                    disabled={phase === "post" && !preSessionId}
+                    className="gap-2 rounded-full font-bold disabled:opacity-50"
                   >
                     <ScanSearch className="h-4 w-4" /> Scan Tools
                   </Button>
                 )}
 
-                {/* Rescan */}
                 {capturedImg && tools.length > 0 && (
                   <Button
                     variant="outline"
@@ -519,43 +577,32 @@ export default function Inventory() {
                   </Button>
                 )}
 
-                {/* Save pre */}
-                {capturedImg &&
-                  tools.length > 0 &&
-                  phase === "pre" &&
-                  !preSaved && (
-                    <Button
-                      onClick={savePreSurgery}
-                      disabled={saving}
-                      className="gap-2 rounded-full font-bold bg-green-600 hover:bg-green-700"
-                    >
-                      <Save className="h-4 w-4" />
-                      {saving ? "Saving…" : "Save Pre-Surgery"}
-                    </Button>
-                  )}
+                {capturedImg && tools.length > 0 && phase === "pre" && !preSaved && (
+                  <Button
+                    onClick={savePreSurgery}
+                    disabled={saving}
+                    className="gap-2 rounded-full font-bold bg-green-600 hover:bg-green-700"
+                  >
+                    <Save className="h-4 w-4" />
+                    {saving ? "Saving…" : "Save Pre-Surgery"}
+                  </Button>
+                )}
 
-                {/* Reconcile post */}
-                {capturedImg &&
-                  tools.length > 0 &&
-                  phase === "post" &&
-                  !reconcile && (
-                    <Button
-                      onClick={reconcilePost}
-                      disabled={saving}
-                      className="gap-2 rounded-full font-bold bg-violet-600 hover:bg-violet-700"
-                    >
-                      <ShieldCheck className="h-4 w-4" />
-                      {saving ? "Reconciling…" : "Reconcile Now"}
-                    </Button>
-                  )}
+                {capturedImg && tools.length > 0 && phase === "post" && !reconcile && (
+                  <Button
+                    onClick={reconcilePost}
+                    disabled={saving || !preSessionId}
+                    className="gap-2 rounded-full font-bold bg-violet-600 hover:bg-violet-700 disabled:opacity-50"
+                  >
+                    <ShieldCheck className="h-4 w-4" />
+                    {saving ? "Reconciling…" : "Reconcile Now"}
+                  </Button>
+                )}
 
-                {/* Retake */}
                 {capturedImg && (
                   <Button
                     variant="ghost"
-                    onClick={() => {
-                      reset();
-                    }}
+                    onClick={reset}
                     className="gap-2 rounded-full font-bold ml-auto"
                   >
                     <RotateCcw className="h-4 w-4" /> Retake
@@ -572,18 +619,10 @@ export default function Inventory() {
                   statusColors[status.type],
                 )}
               >
-                {status.type === "ok" && (
-                  <CheckCircle2 className="h-4 w-4 shrink-0" />
-                )}
-                {status.type === "err" && (
-                  <XCircle className="h-4 w-4 shrink-0" />
-                )}
-                {status.type === "warn" && (
-                  <AlertTriangle className="h-4 w-4 shrink-0" />
-                )}
-                {status.type === "info" && (
-                  <ScanSearch className="h-4 w-4 shrink-0" />
-                )}
+                {status.type === "ok" && <CheckCircle2 className="h-4 w-4 shrink-0" />}
+                {status.type === "err" && <XCircle className="h-4 w-4 shrink-0" />}
+                {status.type === "warn" && <AlertTriangle className="h-4 w-4 shrink-0" />}
+                {status.type === "info" && <ScanSearch className="h-4 w-4 shrink-0" />}
                 {status.msg}
               </div>
             )}
@@ -591,6 +630,42 @@ export default function Inventory() {
 
           {/* Right — results */}
           <div className="lg:col-span-4 space-y-4">
+            {/* Pre tools from DB (shown in post phase before reconcile) */}
+            {phase === "post" && preToolsFromDB.length > 0 && !reconcile && (
+              <div className="glass-card rounded-2xl overflow-hidden">
+                <div className="p-5 border-b border-white/10 bg-muted/10 flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-primary/20 p-2 rounded-xl">
+                      <Package className="h-4 w-4 text-primary" />
+                    </div>
+                    <h3 className="font-bold">Pre-Surgery Record</h3>
+                  </div>
+                  <Badge className="bg-primary/20 text-primary border-primary/30 font-black">
+                    {preToolsFromDB.length}
+                  </Badge>
+                </div>
+                <div className="p-3 space-y-2 max-h-60 overflow-y-auto">
+                  {preToolsFromDB.map((t, i) => (
+                    <div
+                      key={i}
+                      className="flex items-center justify-between px-4 py-2.5 rounded-xl border bg-muted/20 border-border/30"
+                    >
+                      <div className="flex items-center gap-2">
+                        <CheckCircle2 className="h-3.5 w-3.5 text-green-500" />
+                        <span className="text-sm font-medium">{toolLabel(t.name)}</span>
+                      </div>
+                      <span
+                        className="text-xs font-black"
+                        style={{ color: confColor(t.confidence) }}
+                      >
+                        {Math.round(t.confidence * 100)}%
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Detected tools list */}
             {tools.length > 0 && (
               <div className="glass-card rounded-2xl overflow-hidden">
@@ -675,7 +750,6 @@ export default function Inventory() {
                 </div>
 
                 <div className="p-4 space-y-4">
-                  {/* Stats */}
                   <div className="grid grid-cols-2 gap-3">
                     {[
                       ["Before", reconcile.preCount],
@@ -693,7 +767,6 @@ export default function Inventory() {
                     ))}
                   </div>
 
-                  {/* Missing */}
                   {reconcile.missing.length > 0 && (
                     <div>
                       <p className="text-xs font-black uppercase tracking-widest text-red-400 mb-2">
@@ -713,7 +786,6 @@ export default function Inventory() {
                     </div>
                   )}
 
-                  {/* Extra */}
                   {reconcile.extra.length > 0 && (
                     <div>
                       <p className="text-xs font-black uppercase tracking-widest text-amber-400 mb-2">
@@ -741,9 +813,7 @@ export default function Inventory() {
               <div className="glass-card rounded-2xl p-5 border border-green-500/20 bg-green-500/5">
                 <div className="flex items-center gap-3 mb-2">
                   <CheckCircle2 className="h-5 w-5 text-green-400" />
-                  <span className="font-bold text-green-400">
-                    Inventory Saved
-                  </span>
+                  <span className="font-bold text-green-400">Inventory Saved</span>
                 </div>
                 <p className="text-sm text-muted-foreground">
                   Switch to{" "}
