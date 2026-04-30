@@ -69,7 +69,7 @@ Use exact tool names from the list. If no tool visible:
 TOOL: none
 CONFIDENCE: low"""
 
-
+# ------------------Helper function to call Groq API with retries and error handling---------------------------------------------
 def _groq_post(payload_bytes: bytes) -> dict:
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -88,7 +88,7 @@ def _groq_post(payload_bytes: bytes) -> dict:
         with urllib.request.urlopen(req, timeout=15) as resp:
             return json.loads(resp.read().decode())
 
-
+# -----------------This is the main function that calls Groq API for live tool detection ------------------------------------------
 def call_groq_vision(image_b64: str) -> dict | None:
     """Detect a single tool from a base64 image sent by the browser."""
     if not GROQ_API_KEY:
@@ -148,7 +148,7 @@ Example output:
 
 Return [] if no instruments visible."""
 
-
+# Calculate Intersection over Union (IoU) of two boxes for deduplication
 def _iou(a: dict, b: dict) -> float:
     ix1 = max(a["x1"], b["x1"]); iy1 = max(a["y1"], b["y1"])
     ix2 = min(a["x2"], b["x2"]); iy2 = min(a["y2"], b["y2"])
@@ -159,7 +159,7 @@ def _iou(a: dict, b: dict) -> float:
     area_b = (b["x2"] - b["x1"]) * (b["y2"] - b["y1"])
     return inter / (area_a + area_b - inter)
 
-
+# (Not used now)Non-maximum suppression to remove duplicates with IoU > threshold and same name, keeping highest confidence (Not needed for now bcz it is used before prioriy function)
 def _nms_deduplicate(tools: list, iou_thresh: float = 0.4) -> list:
     if not tools:
         return tools
@@ -183,7 +183,7 @@ def _nms_deduplicate(tools: list, iou_thresh: float = 0.4) -> list:
         result.extend(kept)
     return result
 
-
+# -----------------------------This is the main Gemini inventory function that calls Gemini API --------------------------------------------
 def _gemini_inventory(image_b64: str) -> list:
     payload = json.dumps({
         "contents": [{
@@ -206,6 +206,7 @@ def _gemini_inventory(image_b64: str) -> list:
                 result = json.loads(resp.read().decode())
             raw = result["candidates"][0]["content"]["parts"][0]["text"].strip()
             print(f"[Gemini Inventory] Using model: {model_name}")
+            print(f"[Gemini Raw Response]: {raw[:300]}")
             break
         except urllib.error.HTTPError as e:
             try: err = json.loads(e.read().decode()).get("error", {}).get("message", str(e))
@@ -217,8 +218,8 @@ def _gemini_inventory(image_b64: str) -> list:
             continue
 
     if raw is None:
-        print("[Gemini Inventory] All models failed")
-        return []
+        print("[Gemini Inventory] All models failed, falling back to OpenRouter...")
+        return _openrouter_inventory(image_b64)
 
     try:
         if "```" in raw:
@@ -259,6 +260,162 @@ def _gemini_inventory(image_b64: str) -> list:
         print(f"[Gemini Inventory] Error: {e}")
         return []
 
+# ----------------------------- This is a backup inventory function that uses OpenRouter ------------------------------------------------------------
+def _openrouter_inventory(image_b64: str, pre_tool_names: list = None) -> list:
+    OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not OPENROUTER_API_KEY:
+        print("[OpenRouter Inventory] No API key found")
+        return []
+
+    # Build the right prompt depending on caller
+    if pre_tool_names:
+        priority_hint = ", ".join(pre_tool_names)
+        prompt = f"""You are a surgical instrument detection system analyzing a POST-surgery tray.
+
+PRIORITY — search specifically for these instruments first (they were present before surgery):
+{priority_hint}
+
+Also detect any other surgical instruments visible.
+Known instruments: {", ".join(SURGICAL_TOOLS)}.
+
+CRITICAL DISTINCTIONS — read before identifying scissors:
+- iris_scissors: SMALL, short blades (~2-3cm), delicate pointed tips, fine lightweight handles — used for eye/microsurgery
+- operating_scissors: LARGE, long blades (~5-7cm), heavier build, blunt or curved tips, thick handles — general surgical use
+When you see scissors, measure the blade length relative to the handle. Short blades = iris_scissors. Long blades = operating_scissors. Do NOT guess.
+
+Return ONLY a valid JSON array. No markdown, no explanation, no extra text.
+Each item must have exactly these fields:
+- "name": instrument name from the known list
+- "confidence": number between 0 and 1
+- "x1": left edge (0.0 to 1.0)
+- "y1": top edge (0.0 to 1.0)
+- "x2": right edge (0.0 to 1.0)
+- "y2": bottom edge (0.0 to 1.0)
+
+Example: [{{"name":"scalpel","confidence":0.9,"x1":0.10,"y1":0.20,"x2":0.25,"y2":0.80}}]
+Return [] if no instruments visible."""
+    else:
+        prompt = INVENTORY_GEMINI_PROMPT  # original pre-surgery prompt
+
+    OPENROUTER_MODELS = [
+    "gemini-2.5-flash",              
+    "gemini-2.5-flash-lite",        
+    "qwen/qwen3-vl-32b-instruct",
+    ]
+
+    headers = {
+        "Authorization": f"Bearer {OPENROUTER_API_KEY}",
+        "Content-Type": "application/json",
+        "HTTP-Referer": "https://surgisense.vercel.app",
+        "X-Title": "SurgiSense"
+    }
+
+    raw = None
+    used_model = None
+    for model_name in OPENROUTER_MODELS:
+        try:
+            import httpx
+            full_payload = {
+                "model": model_name,
+                "messages": [{
+                    "role": "user",
+                    "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"}},
+                        {"type": "text", "text": prompt}
+                    ]
+                }],
+                "max_tokens": 4096,
+                "temperature": 0.1
+            }
+            with httpx.Client(timeout=30) as client:
+                resp = client.post(
+                    "https://openrouter.ai/api/v1/chat/completions",
+                    json=full_payload,
+                    headers=headers
+                )
+                resp.raise_for_status()
+                result = resp.json()
+            raw = result["choices"][0]["message"]["content"].strip()
+            used_model = model_name
+            print(f"[OpenRouter Inventory] Using model: {model_name}")
+            print(f"[OpenRouter Raw Response]: {raw[:300]}")
+            break
+        except Exception as e:
+            print(f"[OpenRouter Inventory] {model_name} error: {e}")
+            continue
+
+    if raw is None:
+        print("[OpenRouter Inventory] All models failed")
+        return []
+
+    try:
+        if "```" in raw:
+            raw = raw.split("```")[1]
+            if raw.startswith("json"):
+                raw = raw[4:]
+        raw = raw.strip()
+
+        items = json.loads(raw)
+        if not isinstance(items, list):
+            return []
+
+        valid = []
+        for t in items:
+            try:
+                if "box_2d" in t:
+                    coords = t["box_2d"]
+                    y1 = max(0.0, coords[0] / 1000)
+                    x1 = max(0.0, coords[1] / 1000)
+                    y2 = min(1.0, coords[2] / 1000)
+                    x2 = min(1.0, coords[3] / 1000)
+                    name = t.get("label", "unknown").lower().replace(" ", "_")
+                    conf = float(t.get("confidence", 0.85))
+
+                elif "x1" in t:
+                    x1 = max(0.0, float(t.get("x1", 0)))
+                    y1 = max(0.0, float(t.get("y1", 0)))
+                    x2 = min(1.0, float(t.get("x2", 1)))
+                    y2 = min(1.0, float(t.get("y2", 1)))
+                    name = t.get("name", "unknown").lower().replace(" ", "_")
+                    conf = float(t.get("confidence", 0.7))
+
+                elif "box" in t and isinstance(t["box"], dict):
+                    box = t["box"]
+                    x1 = max(0.0, float(box.get("x1", 0)) / 1000)
+                    y1 = max(0.0, float(box.get("y1", 0)) / 1000)
+                    x2 = min(1.0, float(box.get("x2", 1000)) / 1000)
+                    y2 = min(1.0, float(box.get("y2", 1000)) / 1000)
+                    name = t.get("name", "unknown").lower().replace(" ", "_")
+                    conf = float(t.get("confidence", 0.7))
+
+                else:
+                    print(f"[OpenRouter Inventory] Skipping unknown format: {t}")
+                    continue
+
+                if x2 <= x1 or y2 <= y1:
+                    print(f"[OpenRouter Inventory] Invalid box skipped: {name} {x1},{y1},{x2},{y2}")
+                    continue
+
+                valid.append({
+                    "name": name,
+                    "confidence": conf,
+                    "box": {"x1": x1, "y1": y1, "x2": x2, "y2": y2}
+                })
+
+            except Exception as e:
+                print(f"[OpenRouter Inventory] Item parse error: {e} | item: {t}")
+                continue
+
+        valid = _nms_deduplicate(valid)
+        print(f"[OpenRouter Inventory] Parsed {len(valid)} items via {used_model}")
+        return valid
+
+    except Exception as e:
+        print(f"[OpenRouter Inventory] Parse error: {e}")
+        print(f"[OpenRouter Inventory] Raw was: {raw[:500]}")
+        return []
+
+# -----------------------------This is a fallback function that uses Groq if Gemini fails for inventory scanning------------------------------------------
 def _groq_inventory_fallback(image_b64: str) -> list:
     PROMPT = f"""You are a surgical instrument inventory system.
 List every surgical instrument visible in this image.
@@ -286,7 +443,7 @@ Return [] if nothing visible."""
         print(f"[Groq Inventory Fallback] Error: {e}")
         return []
 
-
+# ------------------------------This is the main inventory function, it decides the model based on available keys--------------------------------------------
 def scan_inventory(image_b64: str) -> list:
     if GEMINI_API_KEY:
         return _gemini_inventory(image_b64)
@@ -305,6 +462,7 @@ DATABASE_URL = os.environ.get(
     "postgresql://surgitrack_user:surgitrack123@localhost:5432/surgitrack"
 )
 
+#---------------------------------- Context manager for database connection handling -----------------------------
 @contextmanager
 def get_db():
     conn = psycopg2.connect(DATABASE_URL, cursor_factory=psycopg2.extras.RealDictCursor)
@@ -317,7 +475,7 @@ def get_db():
     finally:
         conn.close()
 
-
+# ----------------------------- Initialize database with tables and seed data if empty -----------------------------
 def init_db():
     with get_db() as conn:
         cur = conn.cursor()
@@ -399,7 +557,7 @@ def init_db():
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  API
+#  API- endpoints
 # ══════════════════════════════════════════════════════════════════════════════
 
 @app.on_event("startup")
@@ -408,8 +566,7 @@ async def startup():
     print("✓ PostgreSQL database ready")
     print("✓ SurgiSense backend ready — camera runs in browser")
 
-
-# ── Live detection — browser sends frame every 3s ─────────────────────────────
+# -------------------------------- Live detection — browser sends frame every 3s ------------------------------------------------
 @app.post("/api/detect")
 async def detect(body: dict = Body(...)):
     image_b64 = body.get("image", "")
@@ -441,8 +598,7 @@ async def detect(body: dict = Body(...)):
 
     return JSONResponse(data)
 
-
-# ── WebSocket ─────────────────────────────────────────────────────────────────
+# ------------------------------------------WebSocket-------------------------------------------------------------
 @app.websocket("/ws/detection")
 async def ws_detection(ws: WebSocket):
     await ws.accept()
@@ -458,8 +614,7 @@ async def ws_detection(ws: WebSocket):
             ws_clients.remove(ws)
         print(f"[WS] Client disconnected. Total: {len(ws_clients)}")
 
-
-# ── Procedures ────────────────────────────────────────────────────────────────
+# ---------------------This end point is used to fetch the procedure name only from the db to display in frontend -------------------------------------
 @app.get("/api/procedures")
 def get_procedures():
     with get_db() as conn:
@@ -468,6 +623,7 @@ def get_procedures():
         rows = cur.fetchall()
     return [{"id": r["id"], "name": r["name"], "description": r["description"]} for r in rows]
 
+# ---------------------This end point is used to fetch the procedure name and stages from the db to display in frontend ------------------------------------------------
 @app.get("/api/procedures/{proc_id}/stages")
 def get_stages(proc_id: int):
     with get_db() as conn:
@@ -480,8 +636,7 @@ def get_stages(proc_id: int):
     return [{"id": r["id"], "procedureId": r["procedure_id"], "name": r["name"],
              "requiredTool": r["required_tool"], "order": r["stage_order"]} for r in rows]
 
-
-# ── Test results ──────────────────────────────────────────────────────────────
+# ---------------------This end point is used to save the procedure results in the db ------------------------------------------------
 @app.post("/api/tests/results")
 async def save_test_result(body: dict):
     proc_id = body.get("procedureId")
@@ -497,7 +652,8 @@ async def save_test_result(body: dict):
     return JSONResponse({"id": row["id"], "procedureId": row["procedure_id"],
                          "marks": row["marks"], "totalStages": row["total_stages"],
                          "completedAt": str(row["completed_at"])}, status_code=201)
-
+    
+# ---------------------This end point is used to compare the procedure stages with pre-defined results in the db ------------------------------------------------
 @app.get("/api/tests/results")
 def get_test_results():
     with get_db() as conn:
@@ -510,8 +666,7 @@ def get_test_results():
              "totalStages": r["total_stages"], "completedAt": str(r["completed_at"]),
              "procedureName": r["procedure_name"]} for r in rows]
 
-
-# ── Contact ───────────────────────────────────────────────────────────────────
+# ---------------------Contact- This is to save the contact messages info in db (Future purposes)------------------------------------------------
 @app.post("/api/contact")
 async def create_contact(body: dict):
     name    = body.get("name",    "").strip()
@@ -525,8 +680,7 @@ async def create_contact(body: dict):
                     (name, email, message))
     return JSONResponse({"success": True}, status_code=201)
 
-
-# ── Chat — Gemini SurgiBot ────────────────────────────────────────────────────
+# ------------------Chat — Gemini SurgiBot --------------------------------------------------
 @app.post("/api/chat")
 async def chat(body: dict):
     api_key = GEMINI_API_KEY
@@ -564,8 +718,7 @@ async def chat(body: dict):
             last_error = str(e)
     return JSONResponse({"response": f"All models failed. Last error: {last_error}"})
 
-
-# ── Inventory ─────────────────────────────────────────────────────────────────
+# ------------------This is the root end point to call the gemini or groq models through the functions at line 446 ---------------------------
 @app.post("/api/inventory/scan")
 async def inventory_scan(body: dict = Body(...)):
     image_b64 = body.get("image", "")
@@ -576,6 +729,7 @@ async def inventory_scan(body: dict = Body(...)):
     tools = scan_inventory(image_b64)
     return JSONResponse({"tools": tools, "count": len(tools)})
 
+#------------------end point for saving tools from pre-surgery page in inventory------------------   
 @app.post("/api/inventory/save")
 async def inventory_save(body: dict = Body(...)):
     session_type = body.get("type", "pre")
@@ -613,7 +767,8 @@ def inventory_latest(session_type: str):
     return JSONResponse({"id": row["id"], "type": row["session_type"],
                          "tools": row["tools_json"], "image": row["image_b64"],
                          "createdAt": str(row["created_at"])})
-
+    
+#------------------end point for comparing tools from both before and after tools------------------   
 @app.post("/api/inventory/reconcile")
 async def inventory_reconcile(body: dict = Body(...)):
     post_tools     = body.get("postTools", [])
@@ -701,7 +856,7 @@ def inventory_latest(session_type: str):
         "tools": row["tools_json"],
         "createdAt": str(row["created_at"])
     })
-    
+#------------------current post-surgery inventory with priority on pre-surgery tools------------------    
 def _gemini_inventory_post(image_b64: str, pre_tool_names: list[str]) -> list:
     priority_hint = ", ".join(pre_tool_names) if pre_tool_names else ", ".join(SURGICAL_TOOLS)
 
@@ -764,8 +919,8 @@ Return [] if no instruments visible."""
             continue
 
     if raw is None:
-        print("[Gemini Post-Scan] All models failed")
-        return []
+        print("[Gemini Inventory] All models failed, falling back to OpenRouter...")
+        return _openrouter_inventory(image_b64, pre_tool_names=pre_tool_names)
 
     try:
         if "```" in raw:
@@ -806,7 +961,7 @@ Return [] if no instruments visible."""
         print(f"[Gemini Post-Scan] Error: {e}")
         return []
 
-
+#------------------end point for current(above function) post-surgery inventory with priority on pre-surgery tools------------------    
 @app.post("/api/inventory/scan-post")
 async def inventory_scan_post(body: dict = Body(...)):
     image_b64 = body.get("image", "")
@@ -819,7 +974,8 @@ async def inventory_scan_post(body: dict = Body(...)):
     print(f"[Post-Scan] Priority tools: {pre_tool_names}")
     tools = _gemini_inventory_post(image_b64, pre_tool_names)
     return JSONResponse({"tools": tools, "count": len(tools)})
-# ── Health ────────────────────────────────────────────────────────────────────
+
+# ------------------Health--------------------------------------------------
 @app.get("/api/health")
 def health():
     return {"status": "ok", "mode": "browser-camera"}
