@@ -75,7 +75,7 @@ function TeamCard({ member, index }: { member: typeof TEAM[0]; index: number }) 
 
   return (
     <FadeIn delay={index * 150} direction="up">
-      <div
+      <div className=""
         onMouseEnter={() => setHovered(true)}
         onMouseLeave={() => setHovered(false)}
         style={{
@@ -256,12 +256,12 @@ export default function TeamSection() {
         }
       `}</style>
 
-      <section style={{ position: "relative", padding: "80px 0" }}>
+      <section style={{ position: "relative", padding: "5px 0" }}>
 
         {/* Section header */}
         <FadeIn direction="up">
-          <div style={{ textAlign: "center", marginBottom: 56 }}>
-            <div style={{
+          <div   style={{ textAlign: "center", marginBottom: 56 }}>
+            <div  style={{
               display: "inline-flex", alignItems: "center", gap: 8,
               padding: "6px 18px", borderRadius: 9999, marginBottom: 16,
               fontSize: 11, fontWeight: 700, letterSpacing: "0.15em", textTransform: "uppercase",
@@ -270,16 +270,15 @@ export default function TeamSection() {
               The Minds Behind SurgiScan
             </div>
 
-            <h2 style={{
-              fontSize: 40, fontWeight: 900, margin: "0 0 12px",
-              color: "#e2e8f0",
-              letterSpacing: "0.05em",
-            }}>
-              Meet Our{" "}
+                    <h1 className="text-[40px] sm:text-4xl md:text-6xl lg:text-7xl font-black tracking-tight bg-clip-text text-transparent bg-gradient-to-b from-foreground to-foreground/60 leading-[1.1] animate-in fade-in slide-in-from-bottom-4 duration-1000 delay-100">
+
+              <span className="text-black dark:text-[#e2e8f0]">
+                Meet Our{" "}
+              </span>
               <span style={{ color: "#10B981", textShadow: "0 0 30px rgba(0,212,255,0.4)" }}>
                 Team
               </span>
-            </h2>
+            </h1>
 
             <p style={{ fontSize: 14, color: "#64748b", maxWidth: 480, margin: "0 auto", lineHeight: 1.7 }}>
               A passionate group of engineers building the future of AI-assisted surgical safety.
@@ -297,4 +296,4 @@ export default function TeamSection() {
       </section>
     </>
   );
-}
+} 

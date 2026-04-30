@@ -108,7 +108,7 @@ export default function About() {
       { label: "Scans Performed", value: 10, suffix: "+", color: "var(--accent3)" },
       { label: "Detection Accuracy", value: 95, suffix: ".2%", color: "#f59e0b" },
     ].map((s, i) => (
-      <div key={i} className="rounded-2xl p-4 sm:p-6 text-center" style={{ background: "rgba(13,21,48,0.9)", border: "1px solid rgba(0,212,255,0.1)" }}>
+      <div key={i} className="rounded-2xl p-4 sm:p-6 text-center font-black dark:font-white" style={{ background: "rgba(13,21,48,0.9)", border: "1px solid rgba(0,212,255,0.1)" }}>
         <div className="text-2xl sm:text-4xl font-black mb-1" style={{ color: s.color, fontFamily: "'Courier New',monospace", textShadow: `0 0 20px ${s.color}` }}>
           <StatCounter target={s.value} suffix={s.suffix} />
         </div>
